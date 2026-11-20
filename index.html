@@ -74,7 +74,11 @@ input[type=range]{width:100%;accent-color:var(--acc);height:32px}
 .spmsg{margin:10px 0}.sp{color:light-dark(#128a3e,#3ddc78)}
 .spform{display:flex;gap:10px;flex-wrap:wrap}
 .spform input{flex:1 1 220px;font:16px Inter,sans-serif;min-height:44px;padding:0 14px;border-radius:12px;border:1.5px solid var(--line);background:var(--bg);color:var(--ink)}
-#spRes{display:grid;gap:8px;margin-top:12px}
+#spRes{display:grid;gap:8px;margin-top:12px}#spList{display:grid;grid-auto-rows:max-content;gap:8px;max-height:min(60vh,560px);overflow-y:auto;overscroll-behavior:contain}
+@media(min-width:760px){#spList{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.spsel{display:flex;align-items:center;gap:8px;font-size:15px;color:var(--mut)}
+.spsel select{font:16px Inter,sans-serif;min-height:44px;padding:0 10px;border-radius:12px;border:1.5px solid var(--line);background:var(--bg);color:var(--ink)}
+.spit small.alb{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}.spit span{min-width:0}
 .spit{display:flex;align-items:center;gap:12px;text-align:start;font:inherit;color:var(--ink);background:var(--bg);border:1.5px solid var(--line);border-radius:12px;padding:8px;cursor:pointer;min-height:56px}
 .spit:hover{border-color:var(--acc)}.spit img{width:48px;height:48px;border-radius:8px;flex:none}
 a.btn{text-decoration:none}.spit b{display:block}.spit small{color:var(--mut)}
@@ -133,7 +137,7 @@ body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bot
   <div class="sppanel">
     <div class="bar" style="justify-content:space-between"><h2 style="margin:0">Canción desde Spotify</h2><button class="btn" id="spX" aria-label="Cerrar">✕</button></div>
     <p id="spMsg" class="spmsg">Pega el enlace de Spotify o escribe el nombre de la canción y el artista.</p>
-    <form id="spForm" class="spform"><input id="spQ" type="search" placeholder="Enlace de Spotify o “canción artista”" autocomplete="off"><button class="btn pri">Buscar</button></form>
+    <form id="spForm" class="spform"><input id="spQ" type="search" placeholder="Nombre de la canción o enlace de Spotify" autocomplete="off" enterkeyhint="search"><label class="spsel">Buscar en <select id="spMode"><option value="all">Todo</option><option value="song">Nombre de la canción</option><option value="artist">Artista</option></select></label><button class="btn pri">Buscar</button></form>
     <div id="spRes"></div>
     <p class="note">Spotify no deja que otras apps lean sus canciones. Por eso se busca la vista previa de 30 segundos de la misma canción en el catálogo de Apple Music y se analiza esa. Si no aparece, pon la canción en otro aparato o parlante y usa ● Grabar. En una canción completa (voz e instrumentos) se detecta la nota dominante, así que el resultado es aproximado.</p>
     <a class="btn" id="spOpen" href="https://open.spotify.com" target="_blank" rel="noopener" hidden>Abrir en Spotify</a>
@@ -415,14 +419,34 @@ const SPRE=/https?:\/\/(?:open\.spotify\.com|spotify\.link|spotify\.app\.link)\/
 const esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function openSp(msg){$('#sp').hidden=false;if(msg)$('#spMsg').textContent=msg;$('#sp').scrollIntoView({behavior:'smooth',block:'start'})}
 async function spTitle(url){try{const r=await fetch('https://open.spotify.com/oembed?url='+encodeURIComponent(url));if(!r.ok)return '';const j=await r.json();return j.title||''}catch(e){return ''}}
+const SHOW=15;let spSeq=0;
+const norm=t=>String(t||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+async function spFetch(q,attr,country){
+  const u='https://itunes.apple.com/search?media=music&entity=song&limit=200&country='+country+'&term='+encodeURIComponent(q)+(attr?'&attribute='+attr:'');
+  try{const r=await fetch(u);if(!r.ok)return [];return (await r.json()).results||[]}catch(e){return []}
+}
 async function spSearch(q){
+  const my=++spSeq,mode=$('#spMode').value,attr={song:'songTerm',artist:'artistTerm'}[mode]||'';
   $('#spRes').innerHTML='<p class="spmsg">Buscando…</p>';
-  try{const r=await fetch('https://itunes.apple.com/search?entity=song&limit=6&term='+encodeURIComponent(q));const j=await r.json();
-    const it=(j.results||[]).filter(x=>x.previewUrl);
-    if(!it.length){$('#spRes').innerHTML='<p class="spmsg">No encontré esa canción. Prueba escribiendo el nombre y el artista.</p>';return}
-    S.spItems=it;
-    $('#spRes').innerHTML='<p class="spmsg" style="margin:0">Elige la canción correcta:</p>'+it.map((x,i)=>`<button class="spit" data-i="${i}">${x.artworkUrl60?`<img alt="" src="${esc(x.artworkUrl60)}">`:''}<span><b>${esc(x.trackName)}</b><small>${esc(x.artistName)}</small></span></button>`).join('');
-  }catch(e){$('#spRes').innerHTML='<p class="spmsg">No pude buscar la canción (revisa tu conexión). Puedes usar ● Grabar mientras suena.</p>'}
+  const reg=((navigator.language||'').split('-')[1]||'CL').toUpperCase();
+  const lists=await Promise.all([...new Set([reg,'US'])].map(c=>spFetch(q,attr,c)));
+  if(my!==spSeq)return;
+  const seen=new Set(),it=[];
+  for(const l of lists)for(const x of l){if(!x.previewUrl)continue;const k=norm(x.trackName)+'|'+norm(x.artistName);if(seen.has(k))continue;seen.add(k);it.push(x)}
+  if(!it.length){$('#spRes').innerHTML=lists.every(l=>!l.length)&&!navigator.onLine?'<p class="spmsg">Sin conexión. Puedes usar ● Grabar mientras suena.</p>':'<p class="spmsg">No encontré canciones con ese nombre. Prueba con otra forma de escribirlo o cambia “Buscar en”.</p>';return}
+  // Las que coinciden exactamente con el nombre buscado van primero
+  const nq=norm(q),score=x=>{const t=norm(x.trackName),a=norm(x.artistName),c=norm(x.trackCensoredName);
+    if(t===nq||c===nq)return 0;if((t+' '+a)===nq||(a+' '+t)===nq)return 1;if(t.startsWith(nq))return 2;if(nq.includes(t))return 3;if(t.includes(nq))return 4;return 5};
+  it.forEach((x,i)=>x._o=i);it.sort((a,b)=>score(a)-score(b)||a._o-b._o);
+  S.spItems=it;S.spShown=0;$('#spRes').innerHTML=`<p class="spmsg" style="margin:0">${it.length} canciones encontradas. Elige la correcta:</p><div id="spList"></div><button class="btn" id="spMore" type="button">Ver más</button>`;
+  spMore();
+}
+function spMore(){
+  const it=S.spItems,from=S.spShown,to=Math.min(it.length,from+SHOW);
+  const fmt=ms=>ms?Math.floor(ms/60000)+':'+String(Math.floor(ms/1000)%60).padStart(2,'0'):'';
+  $('#spList').insertAdjacentHTML('beforeend',it.slice(from,to).map((x,k)=>{const i=from+k,y=(x.releaseDate||'').slice(0,4);
+    return `<button class="spit" data-i="${i}">${x.artworkUrl60?`<img alt="" loading="lazy" src="${esc(x.artworkUrl60)}">`:''}<span><b>${esc(x.trackName)}</b><small>${esc(x.artistName)}</small><small class="alb">${esc([x.collectionName,y,fmt(x.trackTimeMillis)].filter(Boolean).join(' · '))}</small></span></button>`}).join(''));
+  S.spShown=to;$('#spMore').hidden=to>=it.length;
 }
 async function spPick(x){
   setStatus('Descargando vista previa…');$('#fname').textContent=x.trackName+' — '+x.artistName;
@@ -442,7 +466,9 @@ async function spHandle(input){
 $('#spBtn').addEventListener('click',()=>{openSp();$('#spQ').focus()});
 $('#spX').addEventListener('click',()=>{$('#sp').hidden=true});
 $('#spForm').addEventListener('submit',e=>{e.preventDefault();spHandle($('#spQ').value)});
-$('#spRes').addEventListener('click',e=>{const b=e.target.closest('.spit');if(b&&S.spItems)spPick(S.spItems[+b.dataset.i])});
+$('#spMode').addEventListener('change',()=>{const q=$('#spQ').value.trim();if(q&&!SPRE.test(q))spSearch(q)});
+let spT=0;$('#spQ').addEventListener('input',e=>{clearTimeout(spT);const q=e.target.value.trim();if(q.length<2||SPRE.test(q))return;spT=setTimeout(()=>spSearch(q),450)});
+$('#spRes').addEventListener('click',e=>{if(e.target.closest('#spMore')){spMore();return}const b=e.target.closest('.spit');if(b&&S.spItems)spPick(S.spItems[+b.dataset.i])});
 // Audio compartido desde otra app (Android)
 async function sharedFile(){
   if(!/[?&]shared=1/.test(location.search)||!('caches' in window))return false;
