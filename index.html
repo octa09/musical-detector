@@ -67,7 +67,14 @@ input[type=range]{width:100%;accent-color:var(--acc);height:32px}
 #sp{padding-top:0}
 .inst{border:1.5px solid var(--line);border-radius:18px;padding:16px 18px;background:var(--card)}
 .ihead{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;justify-content:space-between}.ihead>div{flex:1 1 300px}
-.mseg{margin-top:10px}.mseg button{min-height:38px}
+.mseg{margin-top:10px}
+.lyr{border:1.5px solid var(--line);border-radius:18px;padding:16px 18px;background:var(--card)}
+#lyrics{display:grid;gap:4px;max-height:min(50vh,420px);overflow-y:auto;margin-top:8px;grid-auto-rows:max-content;scroll-behavior:smooth}
+#lyrics:empty{display:none}
+.lline{display:flex;gap:12px;align-items:baseline;text-align:start;font:17px/1.4 Inter,sans-serif;color:var(--ink);background:none;border:0;border-radius:10px;padding:8px 10px;cursor:pointer;min-height:44px}
+.lline span{font-size:13px;color:var(--mut);flex:none;width:3em;font-variant-numeric:tabular-nums}
+.lline:hover{background:var(--row)}.lline.on{background:var(--soft);color:var(--acc);font-weight:600}
+@media(min-width:980px){.lyr{grid-column:1/-1}}.mseg button{min-height:38px}
 .ihint{display:block;color:var(--mut);font-size:13px}.chk{display:flex;align-items:center;gap:10px;min-height:44px;font-weight:600;font-size:15px;margin-top:6px;cursor:pointer}.chk input{width:22px;height:22px;accent-color:var(--acc)}
 .ibtns{display:flex;flex-wrap:wrap;gap:10px;margin:6px 0 12px}.ilab{font-weight:600;font-size:15px;display:block}
 @media(min-width:980px){.inst{grid-column:1/-1}}
@@ -166,6 +173,14 @@ body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bot
       <label for="iAmt" class="ilab">Intensidad: <span id="vAmt">85</span>%</label><input id="iAmt" type="range" min="0" max="100" value="85"><small class="ihint">Más alta quita más voz, pero puede apagar un poco otros instrumentos que estén al centro.</small>
       <label class="chk"><input type="checkbox" id="iMel"> Mantener la melodía de la voz tocada por un instrumento</label>
     </div>
+  </section>
+  <section class="lyr">
+    <div class="ihead"><div><h2 style="margin:0">Letra</h2><p class="spmsg" id="lMsg"></p></div>
+      <div class="bar"><label class="spsel">Idioma <select id="lLang"><option value="">Automático</option><option value="spanish">Español</option><option value="english">Inglés</option><option value="portuguese">Portugués</option></select></label>
+      <button class="btn pri" id="lGo">Analizar letra</button><button class="btn" id="lCancel" hidden>Cancelar</button></div></div>
+    <div id="lyrics"></div>
+    <div class="bar" style="margin-top:12px"><button class="btn pri" id="lInst" hidden>Crear instrumental guiado por la letra</button><button class="btn" id="lCopy">Copiar letra</button></div>
+    <small class="ihint">La letra se reconoce automáticamente y puede tener errores, sobre todo con mucho efecto en la voz. La primera vez descarga el reconocedor (unos 80 MB).</small>
   </section>
   <section class="res">
     <h2>Melodía detectada</h2>
@@ -291,6 +306,7 @@ function draw(){
     if(i===S.sel){ctx.strokeStyle=C.ink;ctx.lineWidth=2.5;ctx.stroke()}
     const lab=nm(n.midi);if(rh>=13&&ctx.measureText(lab).width+10<bw){ctx.fillStyle='#fff';ctx.fillText(lab,bx+5,by+bh/2+.5)}});
   if(playT>=0){ctx.fillStyle=C.ink;ctx.fillRect(x(playT),0,2,H-AX)}
+  if(typeof hlLyric==='function')hlLyric();
   const sl=wrap.scrollLeft;ctx.fillStyle=C.card;ctx.fillRect(sl,0,GUT,H);ctx.fillStyle=C.line;ctx.fillRect(sl+GUT-1,0,1,H);
   for(let m=lo;m<=hi;m++){const pc=(m%12+12)%12;if(rh>=11||pc===0||(rh>=6&&!BLACK.includes(pc))){ctx.fillStyle=pc===0?C.ink:C.mut;ctx.fillText(nm(m),sl+6,y(m)+rh/2)}}
 }
@@ -306,12 +322,12 @@ function tone(m,when,d,vol=.22){const a=getAC(),o=a.createOscillator(),g=a.creat
   g.gain.setValueAtTime(0,when);g.gain.linearRampToValueAtTime(vol,when+.015);g.gain.setValueAtTime(vol,when+Math.max(.03,d-.06));g.gain.linearRampToValueAtTime(0,when+d);
   o.connect(g);g.connect(a.destination);o.start(when);o.stop(when+d+.03);return o}
 function follow(){if(!S.geo)return;const px=GUT+playT*S.geo.sc,sl=wrap.scrollLeft,vw=wrap.clientWidth;if(px>sl+vw-60||px<sl+GUT)wrap.scrollLeft=Math.max(0,px-GUT-40)}
-async function play(kind){
+async function play(kind,from=0){
   stop();if(!S.buf)return;const a=getAC();try{await a.resume()}catch(e){}const now=a.currentTime+.06;let end;
   const bb={orig:S.buf,inst:curInst(),voz:S.voz}[kind];
-  if(bb){const s=a.createBufferSource();s.buffer=bb;s.connect(a.destination);s.start(now);src.push(s);end=bb.duration}
-  else{if(!S.notes.length)return;for(const n of S.notes)src.push(tone(n.midi,now+n.t,Math.max(.08,n.d)));const l=S.notes[S.notes.length-1];end=l.t+l.d}
-  mode=kind;t0=now;updBtns();
+  if(bb){from=Math.max(0,Math.min(from,bb.duration-.05));const s=a.createBufferSource();s.buffer=bb;s.connect(a.destination);s.start(now,from);src.push(s);end=bb.duration}
+  else{from=0;if(!S.notes.length)return;for(const n of S.notes)src.push(tone(n.midi,now+n.t,Math.max(.08,n.d)));const l=S.notes[S.notes.length-1];end=l.t+l.d}
+  mode=kind;t0=now-from;updBtns();
   const tick=()=>{playT=Math.max(0,a.currentTime-t0);if(playT>end+.15){stop();return}follow();draw();raf=requestAnimationFrame(tick)};raf=requestAnimationFrame(tick);
 }
 async function pick(i,scroll){S.sel=i;const n=S.notes[i];render();if(scroll&&S.geo)wrap.scrollLeft=Math.max(0,GUT+n.t*S.geo.sc-wrap.clientWidth/2);
@@ -481,7 +497,7 @@ async function aiRun(x){
 async function buildInstAI(){
   const b0=S.buf,msg=t=>$('#iMsg').textContent=t;let b=b0;
   if(b.sampleRate!==AI.sr||b.numberOfChannels!==2){const oc=new OfflineAudioContext(2,Math.ceil(b.duration*AI.sr),AI.sr),s=oc.createBufferSource();s.buffer=b;s.connect(oc.destination);s.start();b=await oc.startRendering()}
-  const L=b.getChannelData(0),R=b.getChannelData(1);
+  const L=b.getChannelData(0),R=b.getChannelData(1);S.aiL=L;S.aiR=R;S.guided=false;
   if(!S.aiVoc||S.aiFor!==b0){
     await getSession(msg);const t0=performance.now();
     S.aiVoc=await mdxVocals(L,R,x=>{if(S.aiCancel)throw new Error('cancel');return aiRun(x)},(c,n)=>{
@@ -494,7 +510,7 @@ async function buildInstAI(){
   S.inst=newBuf([iL,iR],AI.sr);S.voz=newBuf([vL,vR],AI.sr);S.instMel=null;
 }
 
-function resetInst(){S.inst=null;S.voz=null;S.instMel=null;S.aiVoc=null;S.aiFor=null;S.aiCancel=false;$('#iCancel').hidden=true;$('#iCtl').hidden=true;$('#iMake').disabled=!S.buf;$('#iMake').hidden=false;$('#iMel').checked=false;
+function resetInst(){S.inst=null;S.voz=null;S.instMel=null;S.aiVoc=null;S.aiFor=null;S.guided=false;S.lyr=null;if($('#lyrics')){$('#lyrics').innerHTML='';$('#lInst').hidden=true;$('#lMsg').textContent='Separa la voz con IA, escucha la letra y te la muestra con sus tiempos. Después puede usarla para quitar la voz justo donde se canta.'}S.aiCancel=false;$('#iCancel').hidden=true;$('#iCtl').hidden=true;$('#iMake').disabled=!S.buf;$('#iMake').hidden=false;$('#iMel').checked=false;
   $('#iMsg').textContent=S.method==='ai'?'Quita la voz con inteligencia artificial. La primera vez descarga el modelo (67 MB) y después queda guardado. Puede tardar unos minutos en el celular.':'Método rápido: quita lo que suena al centro de la mezcla. Funciona con canciones en estéreo.'}
 function isMono(buf){if(buf.numberOfChannels<2)return true;const L=buf.getChannelData(0),R=buf.getChannelData(1),st=Math.max(1,Math.floor(L.length/200000));let s=0,m=0;
   for(let i=0;i<L.length;i+=st){const a=L[i],b=R[i];s+=(a-b)*(a-b);m+=(a+b)*(a+b)}return s<m*0.002}
@@ -552,8 +568,74 @@ $('#iMel').addEventListener('change',async e=>{if(!S.inst)return;const was=mode=
   if(e.target.checked&&!S.instMel){$('#iMsg').textContent='Pasando la melodía de la voz a un instrumento…';try{const n=await buildMel();$('#iMsg').textContent=`Listo: la melodía de la voz (${n} notas) ahora la toca un instrumento.`}catch(err){$('#iMsg').textContent='No pude crear la melodía.';e.target.checked=false}}
   if(was)play('inst')});
 $('#iAmt').addEventListener('input',e=>$('#vAmt').textContent=e.target.value);
-$('#iAmt').addEventListener('change',async()=>{if(!S.buf||!S.inst)return;const was=mode==='inst',mel=$('#iMel').checked;stop();if(S.method==='ai')await buildInstAI();else await buildInst();
+$('#iAmt').addEventListener('change',async()=>{if(!S.buf||!S.inst)return;const was=mode==='inst',mel=$('#iMel').checked;stop();if(S.method==='ai')await (S.guided&&S.lyr?buildGuided():buildInstAI());else await buildInst();
   if(mel){$('#iMsg').textContent='Actualizando la melodía…';await buildMel()}$('#iMsg').textContent='Instrumental actualizado.';if(was)play('inst')});
+// Letra: transcribe la voz separada (Whisper) y la usa para guiar el instrumental
+const TF='https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2';
+const HALLU=/amara\.org|subt[ií]tulos|gracias por ver|suscr[ií]bete|thanks for watching|^\W*$/i;
+let asr=null;
+const fmtT=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
+async function getASR(msg){
+  if(asr)return asr;msg('Cargando el reconocedor de letra…');
+  const T=await import(TF);T.env.allowLocalModels=false;const files={};
+  asr=await T.pipeline('automatic-speech-recognition','Xenova/whisper-base',{dtype:'q8',device:'wasm',progress_callback:p=>{
+    if(p.status==='progress'&&p.total){files[p.file]=[p.loaded,p.total];let l=0,t=0;for(const k in files){l+=files[k][0];t+=files[k][1]}
+      msg(`Descargando el reconocedor de letra (solo la primera vez)… ${Math.round(l/t*100)}% · ${(t/1e6).toFixed(0)} MB`)}}});
+  return asr;
+}
+function renderLyrics(){
+  $('#lyrics').innerHTML=(S.lyr||[]).map((l,i)=>`<button class="lline" data-i="${i}"><span>${fmtT(l.s)}</span>${esc(l.t)}</button>`).join('');S.lyrOn=-1;
+}
+function hlLyric(){
+  if(!S.lyr||!S.lyr.length)return;let on=-1;
+  if(playT>=0&&(mode==='orig'||mode==='inst'||mode==='voz'))on=S.lyr.findIndex(l=>playT>=l.s&&playT<l.e);
+  if(on===S.lyrOn)return;const els=document.querySelectorAll('.lline');if(els[S.lyrOn])els[S.lyrOn].classList.remove('on');
+  if(els[on]){els[on].classList.add('on');const box=$('#lyrics');const el=els[on];if(el.offsetTop<box.scrollTop||el.offsetTop>box.scrollTop+box.clientHeight-50)box.scrollTop=el.offsetTop-box.clientHeight/3}
+  S.lyrOn=on;
+}
+async function analyzeLyrics(){
+  if(!S.buf)return;stop();const msg=t=>$('#lMsg').textContent=t;$('#lGo').disabled=true;S.aiCancel=false;$('#lCancel').hidden=false;
+  try{
+    if(!S.aiVoc||S.aiFor!==S.buf){msg('Primero separo la voz de la música con IA…');S.method='ai';$('#mAi').classList.add('on');$('#mFast').classList.remove('on');
+      const orig=$('#iMsg');const mo=new MutationObserver(()=>msg(orig.textContent));mo.observe(orig,{childList:true,characterData:true,subtree:true});
+      try{await buildInstAI()}finally{mo.disconnect()}$('#iCtl').hidden=false;$('#iMake').hidden=true;$('#iMsg').textContent='Instrumental con IA listo.'}
+    const [vL,vR]=S.aiVoc,n=vL.length,mono=new Float32Array(n);for(let i=0;i<n;i++)mono[i]=(vL[i]+vR[i])/2;
+    const src=newBuf([mono],AI.sr),oc=new OfflineAudioContext(1,Math.ceil(src.duration*16000),16000),s=oc.createBufferSource();s.buffer=src;s.connect(oc.destination);s.start();
+    const x=(await oc.startRendering()).getChannelData(0);
+    const tr=await getASR(msg);if(S.aiCancel)throw new Error('cancel');msg('Escuchando la letra… (puede tardar un poco)');
+    const lang=$('#lLang').value,out=await tr(x,{chunk_length_s:30,stride_length_s:5,return_timestamps:true,task:'transcribe',...(lang?{language:lang}:{})}),dur=src.duration;
+    S.lyr=(out.chunks||[]).map(c=>{const a=c.timestamp[0]??0,b=c.timestamp[1]??Math.min(dur,a+4);return {s:a,e:Math.max(b,a+.3),t:(c.text||'').trim()}}).filter(c=>c.t&&!HALLU.test(c.t)&&!/^[\[(♪].*[\])♪]$/.test(c.t));
+    renderLyrics();$('#lInst').hidden=!S.lyr.length;
+    msg(S.lyr.length?`Encontré ${S.lyr.length} frases cantadas. Toca una para escucharla, o crea el instrumental guiado por la letra.`:'No encontré letra cantada en esta canción.');
+  }catch(e){msg(e.message==='cancel'?'Cancelado.':'No pude analizar la letra ('+(e.message||'error')+'). Revisa tu conexión e intenta de nuevo.')}
+  $('#lGo').disabled=false;$('#lCancel').hidden=true;
+}
+// Instrumental guiado: donde se canta, limpieza fuerte (IA + segunda pasada); donde no, el instrumental normal de la IA
+async function buildGuided(){
+  const msg=t=>{$('#lMsg').textContent=t;$('#iMsg').textContent=t},L=S.aiL,R=S.aiR,[vL,vR]=S.aiVoc,n=L.length,sr=AI.sr;
+  const k=Math.min(1.2,+$('#iAmt').value/85),sL=new Float32Array(n),sR=new Float32Array(n);
+  for(let i=0;i<n;i++){sL[i]=L[i]-vL[i]*Math.max(1.1,k);sR[i]=R[i]-vR[i]*Math.max(1.1,k)}
+  const [cL,cR]=await separateSpec(sL,sR,sr,1,p=>msg('Limpiando los restos de voz en las partes cantadas… '+Math.round(p*100)+'%'));
+  const g=new Float32Array(n),f=1/Math.round(.12*sr);
+  for(const l of S.lyr){const a=Math.max(0,Math.floor((l.s-.3)*sr)),b=Math.min(n,Math.ceil((l.e+.8)*sr));for(let i=a;i<b;i++)g[i]=1}
+  for(let i=1;i<n;i++)g[i]=Math.max(g[i],g[i-1]-f);for(let i=n-2;i>=0;i--)g[i]=Math.max(g[i],g[i+1]-f);
+  const oL=new Float32Array(n),oR=new Float32Array(n);
+  for(let i=0;i<n;i++){const w=g[i];oL[i]=w*cL[i]+(1-w)*(L[i]-k*vL[i]);oR[i]=w*cR[i]+(1-w)*(R[i]-k*vR[i])}
+  S.inst=newBuf([oL,oR],sr);S.instMel=null;S.guided=true;
+}
+async function makeGuided(){
+  if(!S.lyr||!S.aiVoc)return;stop();$('#lInst').disabled=true;
+  try{await buildGuided();$('#iCtl').hidden=false;$('#iMake').hidden=true;
+    $('#iMsg').textContent='Instrumental guiado por la letra: en las partes cantadas se limpió dos veces; en el resto queda la música de la IA.';
+    $('#lMsg').textContent='Listo. Escúchalo o guárdalo en la sección Instrumental.';play('inst');document.querySelector('.inst').scrollIntoView({behavior:'smooth'})}
+  catch(e){$('#lMsg').textContent='No pude crear el instrumental guiado.'}
+  $('#lInst').disabled=false;
+}
+$('#lGo').addEventListener('click',analyzeLyrics);
+$('#lCancel').addEventListener('click',()=>{S.aiCancel=true;$('#lMsg').textContent='Cancelando…'});
+$('#lInst').addEventListener('click',makeGuided);
+$('#lyrics').addEventListener('click',e=>{const b=e.target.closest('.lline');if(b)play(S.inst?'inst':'orig',S.lyr[+b.dataset.i].s)});
+$('#lCopy').addEventListener('click',async()=>{const t=(S.lyr||[]).map(l=>l.t).join('\n');try{await navigator.clipboard.writeText(t);$('#lCopy').textContent='Copiada'}catch(e){$('#lCopy').textContent='No se pudo copiar'}setTimeout(()=>$('#lCopy').textContent='Copiar letra',1600)});
 // Grabación con micrófono
 let rec=null;
 function yinLive(b,sr){const N=1024,tMin=Math.floor(sr/1400),tMax=Math.min(Math.ceil(sr/62),b.length-N-1);let e=0;for(let j=0;j<N;j++)e+=b[j]*b[j];if(Math.sqrt(e/N)<0.008)return 0;
