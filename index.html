@@ -67,6 +67,7 @@ input[type=range]{width:100%;accent-color:var(--acc);height:32px}
 #sp{padding-top:0}
 .inst{border:1.5px solid var(--line);border-radius:18px;padding:16px 18px;background:var(--card)}
 .ihead{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;justify-content:space-between}.ihead>div{flex:1 1 300px}
+.mseg{margin-top:10px}.mseg button{min-height:38px}
 .ihint{display:block;color:var(--mut);font-size:13px}.chk{display:flex;align-items:center;gap:10px;min-height:44px;font-weight:600;font-size:15px;margin-top:6px;cursor:pointer}.chk input{width:22px;height:22px;accent-color:var(--acc)}
 .ibtns{display:flex;flex-wrap:wrap;gap:10px;margin:6px 0 12px}.ilab{font-weight:600;font-size:15px;display:block}
 @media(min-width:980px){.inst{grid-column:1/-1}}
@@ -159,7 +160,7 @@ body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bot
     </div>
   </div>
   <section class="inst">
-    <div class="ihead"><div><h2 style="margin:0">Instrumental</h2><p class="spmsg" id="iMsg"></p></div><button class="btn pri" id="iMake" disabled>Crear instrumental</button></div>
+    <div class="ihead"><div><h2 style="margin:0">Instrumental</h2><div class="seg mseg" role="group" aria-label="Método"><button id="mAi" class="on">IA (mejor)</button><button id="mFast">Rápido</button></div><p class="spmsg" id="iMsg"></p></div><div class="bar"><button class="btn pri" id="iMake" disabled>Crear instrumental</button><button class="btn" id="iCancel" hidden>Cancelar</button></div></div>
     <div id="iCtl" hidden>
       <div class="ibtns"><button class="btn" id="iPlay">▶ Instrumental</button><button class="btn" id="iVoz">▶ Voz aprox.</button><button class="btn" id="iSave">Guardar</button><button class="btn" id="iNotes">Notas de la voz</button></div>
       <label for="iAmt" class="ilab">Intensidad: <span id="vAmt">85</span>%</label><input id="iAmt" type="range" min="0" max="100" value="85"><small class="ihint">Más alta quita más voz, pero puede apagar un poco otros instrumentos que estén al centro.</small>
@@ -199,7 +200,7 @@ const pcName=p=>(notation==='es'?ES:EN)[(p%12+12)%12];
 const nm=m=>pcName(m)+(Math.floor(m/12)-1);
 const SR=11025,W=512,HOP=192,TMIN=Math.floor(SR/1400),TMAX=Math.ceil(SR/62);
 let ac=null;const getAC=()=>{if(!ac)ac=new (window.AudioContext||window.webkitAudioContext)();return ac};
-const S={buf:null,A:null,notes:[],mm:null,dur:0,sel:-1,geo:null};
+const S={method:'ai',buf:null,A:null,notes:[],mm:null,dur:0,sel:-1,geo:null};
 const statusEl=$('#status');
 const setStatus=(t,err)=>{statusEl.textContent=t;statusEl.classList.toggle('err',!!err)};
 const decode=ab=>new Promise((res,rej)=>{try{const p=getAC().decodeAudioData(ab,res,rej);if(p&&p.catch)p.catch(rej)}catch(e){rej(e)}});
@@ -394,8 +395,107 @@ async function separateSpec(Lx,Rx,sr,amount,onProg){
   }
   return [oL,oR];
 }
-function resetInst(){S.inst=null;S.voz=null;S.instMel=null;$('#iCtl').hidden=true;$('#iMake').disabled=!S.buf;$('#iMake').hidden=false;$('#iMel').checked=false;
-  $('#iMsg').textContent='Quita la voz de la canción y deja la música. Funciona con canciones en estéreo (como las de Spotify o Apple Music).'}
+function makeDFT(N){
+  let M=1;while(M<2*N-1)M<<=1;const fft=makeFFT(M),cr=new Float64Array(N),ci=new Float64Array(N);
+  for(let n=0;n<N;n++){const a=Math.PI*((n*n)%(2*N))/N;cr[n]=Math.cos(a);ci[n]=-Math.sin(a)}
+  const br=new Float64Array(M),bi=new Float64Array(M);
+  for(let n=0;n<N;n++){br[n]=cr[n];bi[n]=-ci[n];if(n){br[M-n]=cr[n];bi[M-n]=-ci[n]}}
+  fft(br,bi,false);const ar=new Float64Array(M),ai=new Float64Array(M);
+  return (xr,xi,oR,oI)=>{ar.fill(0);ai.fill(0);
+    for(let n=0;n<N;n++){ar[n]=xr[n]*cr[n]-xi[n]*ci[n];ai[n]=xr[n]*ci[n]+xi[n]*cr[n]}
+    fft(ar,ai,false);
+    for(let k=0;k<M;k++){const r=ar[k]*br[k]-ai[k]*bi[k],i=ar[k]*bi[k]+ai[k]*br[k];ar[k]=r;ai[k]=i}
+    fft(ar,ai,true);
+    for(let k=0;k<N;k++){oR[k]=ar[k]*cr[k]-ai[k]*ci[k];oI[k]=ar[k]*ci[k]+ai[k]*cr[k]}}}
+const AI={nfft:7680,hop:1024,dimF:3072,dimT:256,comp:1.009,sr:44100};
+// Separa con el modelo: L,R a 44.1 kHz → voz (L,R). run(Float32Array[1,4,dimF,dimT]) → Float32Array
+async function mdxVocals(L,R,run,msg){
+  const n=L.length,{nfft,hop,dimF,dimT}=AI,CH=hop*(dimT-1),trim=nfft/2,gen=CH-2*trim,pad=gen-n%gen,chunks=(n+pad)/gen;
+  const mL=new Float32Array(trim+n+pad+trim),mR=new Float32Array(mL.length);mL.set(L,trim);mR.set(R,trim);
+  const vL=new Float32Array(n+pad),vR=new Float32Array(n+pad),dft=makeDFT(nfft),win=new Float64Array(nfft);
+  for(let i=0;i<nfft;i++)win[i]=0.5-0.5*Math.cos(2*Math.PI*i/nfft);
+  const xr=new Float64Array(nfft),xi=new Float64Array(nfft),Zr=new Float64Array(nfft),Zi=new Float64Array(nfft),inp=new Float32Array(4*dimF*dimT);
+  const wsum=new Float64Array(CH+nfft);for(let t=0;t<dimT;t++)for(let i=0;i<nfft;i++)wsum[t*hop+i]+=win[i]*win[i];
+  const ix=(c,k,t)=>(c*dimF+k)*dimT+t,yieldUI=()=>new Promise(r=>setTimeout(r));
+  for(let c=0;c<chunks;c++){
+    const off=c*gen,get=(a,j)=>{if(j<0)j=-j;else if(j>=CH)j=2*(CH-1)-j;return a[off+j]};
+    msg(c,chunks,'stft');
+    for(let t=0;t<dimT;t++){
+      for(let i=0;i<nfft;i++){const j=t*hop+i-trim;xr[i]=get(mL,j)*win[i];xi[i]=get(mR,j)*win[i]}
+      dft(xr,xi,Zr,Zi);
+      for(let k=0;k<dimF;k++){const nk=(nfft-k)%nfft,ar=Zr[k],ai=Zi[k],br=Zr[nk],bi=-Zi[nk];
+        inp[ix(0,k,t)]=(ar+br)/2;inp[ix(1,k,t)]=(ai+bi)/2;inp[ix(2,k,t)]=(ai-bi)/2;inp[ix(3,k,t)]=-(ar-br)/2}
+      if(t%24===0)await yieldUI();
+    }
+    msg(c,chunks,'ia');
+    const out=await run(inp);
+    msg(c,chunks,'istft');
+    const ol=new Float64Array(CH+nfft),orr=new Float64Array(CH+nfft);
+    for(let t=0;t<dimT;t++){
+      Zr.fill(0);Zi.fill(0);
+      for(let k=0;k<dimF;k++){const lr=out[ix(0,k,t)],li=out[ix(1,k,t)],rr=out[ix(2,k,t)],ri=out[ix(3,k,t)];
+        Zr[k]=lr-ri;Zi[k]=-(li+rr);if(k>0){Zr[nfft-k]=lr+ri;Zi[nfft-k]=-(rr-li)}}
+      dft(Zr,Zi,xr,xi);
+      for(let i=0;i<nfft;i++){const w=win[i]/nfft;ol[t*hop+i]+=xr[i]*w;orr[t*hop+i]-=xi[i]*w}
+      if(t%24===0)await yieldUI();
+    }
+    for(let i=trim;i<CH-trim;i++){const j=i+trim,w=wsum[j]>1e-8?wsum[j]:1;vL[off+i-trim]=ol[j]/w*AI.comp;vR[off+i-trim]=orr[j]/w*AI.comp}
+  }
+  return [vL.subarray(0,n),vR.subarray(0,n)];
+}
+// Modelo de IA (Kim_Vocal_2, MDX-Net) con ONNX Runtime Web
+const ORT='https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
+const MODEL_URLS=['https://huggingface.co/huangjackson/Kim_Vocal_2/resolve/main/Kim_Vocal_2.onnx','https://huggingface.co/memoavatar/memo/resolve/main/misc/vocal_separator/Kim_Vocal_2.onnx'];
+let aiSess=null;
+const loadScript=src=>new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.crossOrigin='anonymous';s.onload=res;s.onerror=()=>rej(new Error('No se pudo cargar el motor de IA'));document.head.appendChild(s)});
+async function getModelBytes(msg){
+  let cache=null;try{cache=await caches.open('notas-modelo')}catch(e){}
+  if(cache){const hit=await cache.match('kim-vocal-2');if(hit){msg('Cargando el modelo guardado…');return new Uint8Array(await hit.arrayBuffer())}}
+  try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(e){}
+  let last;
+  for(const u of MODEL_URLS){
+    try{const r=await fetch(u);if(!r.ok)throw new Error('HTTP '+r.status);
+      const total=+r.headers.get('content-length')||66759214,rd=r.body.getReader(),parts=[];let got=0;
+      for(;;){const {done,value}=await rd.read();if(done)break;if(S.aiCancel)throw new Error('cancel');parts.push(value);got+=value.length;
+        msg(`Descargando el modelo de IA (solo la primera vez)… ${Math.min(100,Math.round(got/total*100))}% · ${(got/1e6).toFixed(0)} de ${(total/1e6).toFixed(0)} MB`)}
+      const out=new Uint8Array(got);let o=0;for(const p of parts){out.set(p,o);o+=p.length}
+      if(cache)try{await cache.put('kim-vocal-2',new Response(out))}catch(e){}
+      return out}
+    catch(e){if(e.message==='cancel')throw e;last=e}
+  }
+  throw last||new Error('No se pudo descargar el modelo');
+}
+async function getSession(msg){
+  if(aiSess)return aiSess;
+  if(!window.ort){msg('Cargando el motor de IA…');await loadScript(ORT+'ort.webgpu.min.js')}
+  ort.env.wasm.wasmPaths=ORT;ort.env.wasm.numThreads=self.crossOriginIsolated?Math.min(4,navigator.hardwareConcurrency||1):1;
+  const bytes=await getModelBytes(msg);msg('Preparando el modelo de IA…');
+  if(navigator.gpu){try{aiSess=await ort.InferenceSession.create(bytes,{executionProviders:['webgpu']});aiSess._gpu=true;return aiSess}catch(e){}}
+  aiSess=await ort.InferenceSession.create(bytes,{executionProviders:['wasm'],graphOptimizationLevel:'all'});return aiSess;
+}
+async function aiRun(x){
+  const run=async s=>{const f={};f[s.inputNames[0]]=new ort.Tensor('float32',x,[1,4,AI.dimF,AI.dimT]);const r=await s.run(f);return r[s.outputNames[0]].data};
+  try{return await run(aiSess)}
+  catch(e){if(!aiSess._gpu)throw e;const b=await getModelBytes(()=>{});aiSess=await ort.InferenceSession.create(b,{executionProviders:['wasm']});return run(aiSess)}
+}
+async function buildInstAI(){
+  const b0=S.buf,msg=t=>$('#iMsg').textContent=t;let b=b0;
+  if(b.sampleRate!==AI.sr||b.numberOfChannels!==2){const oc=new OfflineAudioContext(2,Math.ceil(b.duration*AI.sr),AI.sr),s=oc.createBufferSource();s.buffer=b;s.connect(oc.destination);s.start();b=await oc.startRendering()}
+  const L=b.getChannelData(0),R=b.getChannelData(1);
+  if(!S.aiVoc||S.aiFor!==b0){
+    await getSession(msg);const t0=performance.now();
+    S.aiVoc=await mdxVocals(L,R,x=>{if(S.aiCancel)throw new Error('cancel');return aiRun(x)},(c,n)=>{
+      if(S.aiCancel)throw new Error('cancel');const el=(performance.now()-t0)/1000,eta=c?Math.round(el/c*(n-c)):null;
+      msg(`Quitando la voz con IA… parte ${c+1} de ${n}`+(eta!=null?` · faltan ~${eta>90?Math.round(eta/60)+' min':eta+' s'}`:' · calculando tiempo…'))});
+    S.aiFor=b0;
+  }
+  const k=Math.min(1.2,+$('#iAmt').value/85),[vL,vR]=S.aiVoc,iL=new Float32Array(L.length),iR=new Float32Array(L.length);
+  for(let i=0;i<L.length;i++){iL[i]=L[i]-k*vL[i];iR[i]=R[i]-k*vR[i]}
+  S.inst=newBuf([iL,iR],AI.sr);S.voz=newBuf([vL,vR],AI.sr);S.instMel=null;
+}
+
+function resetInst(){S.inst=null;S.voz=null;S.instMel=null;S.aiVoc=null;S.aiFor=null;S.aiCancel=false;$('#iCancel').hidden=true;$('#iCtl').hidden=true;$('#iMake').disabled=!S.buf;$('#iMake').hidden=false;$('#iMel').checked=false;
+  $('#iMsg').textContent=S.method==='ai'?'Quita la voz con inteligencia artificial. La primera vez descarga el modelo (67 MB) y después queda guardado. Puede tardar unos minutos en el celular.':'Método rápido: quita lo que suena al centro de la mezcla. Funciona con canciones en estéreo.'}
 function isMono(buf){if(buf.numberOfChannels<2)return true;const L=buf.getChannelData(0),R=buf.getChannelData(1),st=Math.max(1,Math.floor(L.length/200000));let s=0,m=0;
   for(let i=0;i<L.length;i+=st){const a=L[i],b=R[i];s+=(a-b)*(a-b);m+=(a+b)*(a+b)}return s<m*0.002}
 const newBuf=(chs,sr)=>{const b=getAC().createBuffer(chs.length,chs[0].length,sr);chs.forEach((c,i)=>b.getChannelData(i).set(c));return b};
@@ -421,12 +521,16 @@ async function buildMel(){
 const curInst=()=>$('#iMel').checked&&S.instMel?S.instMel:S.inst;
 async function makeInst(){
   if(!S.buf)return;stop();
-  if(isMono(S.buf)){$('#iMsg').textContent='Este audio es mono (o casi): la voz no se puede separar con este método. Funciona con canciones en estéreo, como las de Spotify o Apple Music; las grabaciones del celular suelen ser mono.';return}
-  $('#iMake').disabled=true;
-  try{await buildInst();$('#iCtl').hidden=false;$('#iMake').hidden=true;
-    $('#iMsg').textContent='Listo. Se quitó lo que suena al centro y es tonal (la voz); la batería, el bajo y los instrumentos se mantienen. Si aún se oye algo de voz, sube la intensidad.'}
-  catch(e){$('#iMsg').textContent='No pude procesar este audio.';$('#iMake').disabled=false}
+  if(S.method!=='ai'&&isMono(S.buf)){$('#iMsg').textContent='Este audio es mono: el método rápido no puede separar la voz. Usa el método IA.';return}
+  $('#iMake').disabled=true;S.aiCancel=false;$('#iCancel').hidden=S.method!=='ai';
+  try{if(S.method==='ai')await buildInstAI();else await buildInst();
+    $('#iCtl').hidden=false;$('#iMake').hidden=true;
+    $('#iMsg').textContent=S.method==='ai'?'Listo. La IA separó la voz del resto de la música. Si aún se oye algo, sube la intensidad.':'Listo (método rápido). Si se sigue oyendo la voz, prueba el método IA.'}
+  catch(e){$('#iMake').disabled=false;
+    $('#iMsg').textContent=e.message==='cancel'?'Cancelado.':(S.method==='ai'?'No pude usar la IA en este dispositivo ('+(e.message||'error')+'). Revisa tu conexión o prueba el método Rápido.':'No pude procesar este audio.')}
+  $('#iCancel').hidden=true;
 }
+const setMethod=m=>{S.method=m;$('#mAi').classList.toggle('on',m==='ai');$('#mFast').classList.toggle('on',m==='fast');if(S.buf){const had=!!S.inst;resetInst();if(had)makeInst()}else resetInst()};
 function wav(buf){const ch=buf.numberOfChannels,n=buf.length,sr=buf.sampleRate,ab=new ArrayBuffer(44+n*ch*2),v=new DataView(ab),w=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i))};
   w(0,'RIFF');v.setUint32(4,36+n*ch*2,true);w(8,'WAVE');w(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,ch,true);v.setUint32(24,sr,true);v.setUint32(28,sr*ch*2,true);v.setUint16(32,ch*2,true);v.setUint16(34,16,true);w(36,'data');v.setUint32(40,n*ch*2,true);
   const d=[];for(let c=0;c<ch;c++)d.push(buf.getChannelData(c));let o=44;
@@ -438,6 +542,8 @@ async function save(buf,label){
   const u=URL.createObjectURL(f),a=document.createElement('a');a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),5000);
 }
 $('#iMake').addEventListener('click',makeInst);
+$('#iCancel').addEventListener('click',()=>{S.aiCancel=true;$('#iMsg').textContent='Cancelando…'});
+$('#mAi').addEventListener('click',()=>{if(S.method!=='ai')setMethod('ai')});$('#mFast').addEventListener('click',()=>{if(S.method!=='fast')setMethod('fast')});
 $('#iPlay').addEventListener('click',()=>mode==='inst'?stop():play('inst'));
 $('#iVoz').addEventListener('click',()=>mode==='voz'?stop():play('voz'));
 $('#iSave').addEventListener('click',()=>S.inst&&save(curInst(),$('#iMel').checked&&S.instMel?'instrumental con melodia':'instrumental'));
@@ -446,7 +552,7 @@ $('#iMel').addEventListener('change',async e=>{if(!S.inst)return;const was=mode=
   if(e.target.checked&&!S.instMel){$('#iMsg').textContent='Pasando la melodía de la voz a un instrumento…';try{const n=await buildMel();$('#iMsg').textContent=`Listo: la melodía de la voz (${n} notas) ahora la toca un instrumento.`}catch(err){$('#iMsg').textContent='No pude crear la melodía.';e.target.checked=false}}
   if(was)play('inst')});
 $('#iAmt').addEventListener('input',e=>$('#vAmt').textContent=e.target.value);
-$('#iAmt').addEventListener('change',async()=>{if(!S.buf||!S.inst)return;const was=mode==='inst',mel=$('#iMel').checked;stop();await buildInst();
+$('#iAmt').addEventListener('change',async()=>{if(!S.buf||!S.inst)return;const was=mode==='inst',mel=$('#iMel').checked;stop();if(S.method==='ai')await buildInstAI();else await buildInst();
   if(mel){$('#iMsg').textContent='Actualizando la melodía…';await buildMel()}$('#iMsg').textContent='Instrumental actualizado.';if(was)play('inst')});
 // Grabación con micrófono
 let rec=null;
