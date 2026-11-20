@@ -73,6 +73,13 @@ input[type=range]{width:100%;accent-color:var(--acc);height:32px}
 #lyrics:empty{display:none}
 .lline{display:flex;gap:12px;align-items:baseline;text-align:start;font:17px/1.4 Inter,sans-serif;color:var(--ink);background:none;border:0;border-radius:10px;padding:8px 10px;cursor:pointer;min-height:44px}
 .lline span{font-size:13px;color:var(--mut);flex:none;width:3em;font-variant-numeric:tabular-nums}
+.lform{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:10px;align-items:end;margin:6px 0 4px}
+.lform label{display:grid;gap:4px;font-size:14px;color:var(--mut)}
+.lform input{font:16px Inter,sans-serif;min-height:44px;padding:0 12px;border-radius:12px;border:1.5px solid var(--line);background:var(--bg);color:var(--ink)}
+@media(max-width:600px){.lform{grid-template-columns:1fr}}
+#lRes{display:grid;gap:8px;margin-top:8px}#lRes:empty{display:none}
+.lline.out{color:var(--mut);opacity:.6;cursor:default}div.lline{cursor:default}div.lline:hover{background:none}
+.lai{margin-top:14px}.lai .bar{margin:6px 0}
 .lline:hover{background:var(--row)}.lline.on{background:var(--soft);color:var(--acc);font-weight:600}
 @media(min-width:980px){.lyr{grid-column:1/-1}}.mseg button{min-height:38px}
 .ihint{display:block;color:var(--mut);font-size:13px}.chk{display:flex;align-items:center;gap:10px;min-height:44px;font-weight:600;font-size:15px;margin-top:6px;cursor:pointer}.chk input{width:22px;height:22px;accent-color:var(--acc)}
@@ -175,12 +182,24 @@ body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bot
     </div>
   </section>
   <section class="lyr">
-    <div class="ihead"><div><h2 style="margin:0">Letra</h2><p class="spmsg" id="lMsg"></p></div>
-      <div class="bar"><label class="spsel">Idioma <select id="lLang"><option value="">Automático</option><option value="spanish">Español</option><option value="english">Inglés</option><option value="portuguese">Portugués</option></select></label>
-      <button class="btn pri" id="lGo">Analizar letra</button><button class="btn" id="lCancel" hidden>Cancelar</button></div></div>
+    <h2 style="margin:0">Letra</h2><p class="spmsg" id="lMsg"></p>
+    <div class="lform">
+      <label>Canción<input id="lName" type="search" autocomplete="off" placeholder="Nombre de la canción" enterkeyhint="search"></label>
+      <label>Artista<input id="lArtist" type="search" autocomplete="off" placeholder="Artista (opcional)" enterkeyhint="search"></label>
+      <button class="btn pri" id="lFind">Buscar letra</button>
+    </div>
+    <div id="lRes"></div>
     <div id="lyrics"></div>
-    <div class="bar" style="margin-top:12px"><button class="btn pri" id="lInst" hidden>Crear instrumental guiado por la letra</button><button class="btn" id="lCopy">Copiar letra</button></div>
-    <small class="ihint">La letra se reconoce automáticamente y puede tener errores, sobre todo con mucho efecto en la voz. La primera vez descarga el reconocedor (unos 80 MB).</small>
+    <div class="bar" style="margin-top:12px">
+      <button class="btn" id="lSync" hidden>Sincronizar con el audio</button><button class="btn" id="lOther" hidden>¿No es la correcta?</button>
+      <button class="btn pri" id="lInst" hidden>Crear instrumental guiado por la letra</button><button class="btn" id="lCopy" hidden>Copiar letra</button>
+    </div>
+    <details class="lai"><summary>¿No encuentra la letra? Reconocerla con IA</summary>
+      <div class="bar"><label class="spsel">Idioma <select id="lLang"><option value="">Automático</option><option value="spanish">Español</option><option value="english">Inglés</option><option value="portuguese">Portugués</option></select></label>
+      <button class="btn" id="lGo">Reconocer con IA</button><button class="btn" id="lCancel" hidden>Cancelar</button></div>
+      <small class="ihint">Escucha el audio y escribe lo que se canta; puede tener errores. También se usa para sincronizar la letra exacta. La primera vez descarga el reconocedor (unos 80 MB).</small>
+    </details>
+    <small class="ihint">Letras de LRCLIB (lrclib.net), una base de datos abierta hecha por la comunidad.</small>
   </section>
   <section class="res">
     <h2>Melodía detectada</h2>
@@ -333,7 +352,7 @@ async function play(kind,from=0){
 async function pick(i,scroll){S.sel=i;const n=S.notes[i];render();if(scroll&&S.geo)wrap.scrollLeft=Math.max(0,GUT+n.t*S.geo.sc-wrap.clientWidth/2);
   if(!mode){const a=getAC();try{await a.resume()}catch(e){}tone(n.midi,a.currentTime+.02,Math.min(.8,Math.max(.25,n.d)))}}
 // Carga de audio
-async function useBuffer(buf,name){stop();S.buf=buf;S.name=name;S.dur=buf.duration;resetSong();S.A=null;S.mm=null;S.notes=[];$('#fname').textContent=name;setStatus('Preparando audio…');render();
+async function useBuffer(buf,name){stop();S.track=S.trackNext||guessTrack(name);S.trackNext=null;S.buf=buf;S.name=name;S.dur=buf.duration;resetSong();S.A=null;S.mm=null;S.notes=[];$('#fname').textContent=name;setStatus('Preparando audio…');render();
   if(buf.duration>600)setStatus('Audio largo: el análisis puede tardar un poco…');
   const x=await toMono(buf);S.A=await analyze(x);resegment();setStatus(S.notes.length+' notas detectadas');wrap.scrollLeft=0}
 async function loadFile(f){if(!f)return;setStatus('Leyendo '+f.name+'…');
@@ -402,8 +421,9 @@ async function buildInstAI(){
 }
 function resetInst(){S.inst=null;S.voz=null;S.instMel=null;S.guided=false;$('#iCancel').hidden=true;$('#iCtl').hidden=true;$('#iMake').disabled=!S.buf;$('#iMake').hidden=false;$('#iMel').checked=false;
   $('#iMsg').textContent=S.method==='ai'?'Quita la voz con inteligencia artificial. La primera vez descarga el modelo (67 MB) y después queda guardado. Puede tardar unos minutos en el celular.':'Método rápido: quita lo que suena al centro de la mezcla. Funciona con canciones en estéreo.'}
-function resetLyr(){S.lyr=null;$('#lyrics').innerHTML='';$('#lInst').hidden=true;$('#lCancel').hidden=true;$('#lGo').disabled=!S.buf;
-  $('#lMsg').textContent='Escucha la canción y te muestra la letra con sus tiempos. Si ya creaste el instrumental con IA, usa la voz separada y es más precisa.'}
+function resetLyr(){S.lyr=null;S.lyrView=null;S.lrFull=null;S.lrRes=null;$('#lyrics').innerHTML='';$('#lRes').innerHTML='';$('#lInst').hidden=true;$('#lSync').hidden=true;$('#lOther').hidden=true;$('#lCopy').hidden=true;$('#lCancel').hidden=true;
+  $('#lGo').disabled=!S.buf;$('#lName').value=S.track?S.track.name:'';$('#lArtist').value=S.track?S.track.artist:'';
+  $('#lMsg').textContent='Busca la letra exacta de la canción en una base de datos de letras. Si no está, “Reconocer con IA” la saca escuchando el audio.'}
 function resetSong(){cancelLane('inst');cancelLane('lyr');S.aiVoc=null;S.aiFor=null;S.vocP=null;resetInst();resetLyr()}
 function isMono(buf){if(buf.numberOfChannels<2)return true;const L=buf.getChannelData(0),R=buf.getChannelData(1),st=Math.max(1,Math.floor(L.length/200000));let s=0,m=0;
   for(let i=0;i<L.length;i+=st){const a=L[i],b=R[i];s+=(a-b)*(a-b);m+=(a+b)*(a+b)}return s<m*0.002}
@@ -466,29 +486,101 @@ $('#iAmt').addEventListener('change',async()=>{if(!S.buf||!S.inst)return;const w
 // Letra: transcribe la voz separada (Whisper) y la usa para guiar el instrumental
 const HALLU=/amara\.org|subt[ií]tulos|gracias por ver|suscr[ií]bete|thanks for watching|^\W*$/i;
 const fmtT=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
+// ---- Letra exacta: LRCLIB (base de datos abierta de letras, muchas con el tiempo de cada línea) ----
+const LR='https://lrclib.net/api/search?';
+function parseLRC(txt){
+  const out=[];for(const raw of String(txt||'').split('\n')){const tags=[...raw.matchAll(/\[(\d+):(\d+(?:[.:]\d+)?)\]/g)];if(!tags.length)continue;
+    const t=raw.replace(/\[[^\]]*\]/g,'').trim();for(const m of tags)out.push({s:+m[1]*60+parseFloat(m[2].replace(':','.')),t})}
+  out.sort((a,b)=>a.s-b.s);for(let i=0;i<out.length;i++)out[i].e=i+1<out.length?Math.min(out[i+1].s,out[i].s+10):out[i].s+6;
+  return out.filter(l=>l.t)}
+function guessTrack(name){const n=String(name||'').replace(/\.[a-z0-9]{2,4}$/i,'').replace(/[_]+/g,' ').trim(),m=n.split(/\s+[-–—]\s+/);
+  return m.length>=2?{artist:m[0].trim(),name:m.slice(1).join(' - ').trim(),preview:false}:{artist:'',name:n,preview:false}}
+async function lrGet(p){const r=await fetch(LR+new URLSearchParams(p));if(!r.ok)return [];return await r.json()}
+async function findLyrics(auto){
+  const msg=t=>$('#lMsg').textContent=t,name=$('#lName').value.trim(),artist=$('#lArtist').value.trim();
+  if(!name){msg('Escribe el nombre de la canción (y el artista, si lo sabes) y toca Buscar letra.');return}
+  msg('Buscando la letra exacta…');$('#lRes').innerHTML='';let res=[];
+  try{const clean=variants(name).pop()||name;
+    if(artist)res=await lrGet({track_name:name,artist_name:artist});
+    if(!res.length&&artist&&clean!==name)res=await lrGet({track_name:clean,artist_name:artist});
+    if(!res.length)res=await lrGet({q:(name+' '+artist).trim()});
+    if(!res.length)res=await lrGet({q:(clean+' '+artist).trim()});
+    if(!res.length&&artist)res=await lrGet({q:clean});
+  }catch(e){msg('No pude conectarme a la base de letras. Revisa tu conexión.');return}
+  res=res.filter(r=>!r.instrumental&&(r.plainLyrics||r.syncedLyrics));
+  if(!res.length){msg('No encontré la letra de esa canción. Revisa cómo está escrito el nombre y el artista, o usa “Reconocer con IA”.');return}
+  const nn=norm(name),nc=norm(variants(name).pop()||name),na=norm(artist),target=(S.track&&S.track.dur)||(S.track&&S.track.preview?0:S.dur);
+  const sc=r=>{let s=0;const t=norm(r.trackName),a=norm(r.artistName);
+    if(t===nn)s+=50;else if(t===nc)s+=45;else if(t.includes(nc)||nc.includes(t))s+=28;
+    if(na){if(a===na)s+=30;else if(a.includes(na)||na.includes(a))s+=18}
+    if(r.syncedLyrics)s+=8;if(target&&r.duration)s+=Math.max(0,12-Math.abs(r.duration-target));return s};
+  res.forEach(r=>r._s=sc(r));res.sort((a,b)=>b._s-a._s);S.lrRes=res.slice(0,10);
+  if(res[0]._s>=75||res.length===1)useLyrics(res[0]);else{msg('Encontré varias opciones. Elige la correcta:');showLrList()}
+}
+function showLrList(){
+  $('#lRes').innerHTML=(S.lrRes||[]).map((r,i)=>`<button class="spit" data-i="${i}"><span><b>${esc(r.trackName)}</b><small>${esc(r.artistName)}</small><small class="alb">${esc([r.albumName,r.duration?fmtT(r.duration):'',r.syncedLyrics?'con tiempos':'sin tiempos'].filter(Boolean).join(' · '))}</small></span></button>`).join('');
+}
+function useLyrics(r){
+  const msg=t=>$('#lMsg').textContent=t;S.lrPick=r;$('#lRes').innerHTML='';
+  const synced=parseLRC(r.syncedLyrics);S.lrSynced=!!synced.length;
+  S.lrFull=synced.length?synced:String(r.plainLyrics||'').split('\n').map(t=>({t:t.trim(),s:null,e:null})).filter(l=>l.t);
+  const preview=S.track&&S.track.preview,fits=S.lrSynced&&!preview&&(!r.duration||Math.abs(r.duration-S.dur)<15);
+  S.lyrView=S.lrFull.map(l=>fits?{...l}:{t:l.t,s:null,e:null});renderLyrics();
+  const who=`“${r.trackName}” de ${r.artistName}`;
+  msg(fits?`Letra exacta de ${who}, sincronizada con la canción. Toca una línea para escucharla.`
+    :`Letra exacta de ${who}.`+(preview?' Como el audio es una vista previa de 30 s, toca “Sincronizar con el audio” para marcar qué parte suena.':' Toca “Sincronizar con el audio” para ubicar cada línea en la canción.'));
+  $('#lSync').hidden=fits;$('#lOther').hidden=!(S.lrRes&&S.lrRes.length>1);
+}
+// Ubica la letra exacta en el audio usando lo que la IA escucha (sirve para vistas previas y letras sin tiempos)
+async function asrAudio(b0){
+  const useVoc=S.aiVoc&&S.aiFor===b0;let src;
+  if(useVoc){const [vL,vR]=S.aiVoc,n=vL.length,mono=new Float32Array(n);for(let i=0;i<n;i++)mono[i]=(vL[i]+vR[i])/2;src=newBuf([mono],AI.sr)}else src=b0;
+  const oc=new OfflineAudioContext(1,Math.ceil(src.duration*16000),16000),s=oc.createBufferSource();s.buffer=src;s.connect(oc.destination);s.start();
+  return {x:(await oc.startRendering()).getChannelData(0).slice(),dur:src.duration,useVoc};
+}
+async function syncLyrics(){
+  if(!S.buf||!S.lrFull)return;const msg=t=>$('#lMsg').textContent=t,b0=S.buf;$('#lSync').disabled=true;$('#lCancel').hidden=false;
+  try{msg('Preparando el audio…');const {x,dur}=await asrAudio(b0),out=await asrJob(x,$('#lLang').value,msg);if(S.buf!==b0)return;
+    const ch=(out.chunks||[]).map(c=>({s:c.timestamp[0]??0,e:c.timestamp[1]??dur,w:toks(c.text||'')})).filter(c=>c.w.length);
+    const lt=S.lrFull.map(l=>toks(l.t)),cover=(line,w)=>{if(!line.length)return 0;const B=new Set(w);let h=0;for(const q of line)if(B.has(q))h++;return h/line.length};
+    let placed=0;
+    if(S.lrSynced){
+      const cand=[];for(const c of ch)lt.forEach((l,i)=>{if(l.length>=2&&cover(l,c.w)>=.6)cand.push(S.lrFull[i].s-c.s)});
+      if(!cand.length)throw new Error('nomatch');
+      let best=cand[0],bn=0;for(const o of cand){const n=cand.filter(q=>Math.abs(q-o)<=1.5).length;if(n>bn){bn=n;best=o}}
+      const near=cand.filter(q=>Math.abs(q-best)<=1.5),off=near.reduce((a,b)=>a+b,0)/near.length;
+      S.lyrView=S.lrFull.map(l=>{const s=l.s-off,e=l.e-off;if(e<=0||s>=dur)return {t:l.t,s:null,e:null};placed++;return {t:l.t,s:Math.max(0,s),e:Math.min(dur,e)}});
+    }else{
+      S.lyrView=S.lrFull.map(l=>({t:l.t,s:null,e:null}));let p=0;
+      for(const c of ch){let bi=-1,bv=.5;for(let i=p;i<Math.min(lt.length,p+12);i++){const v=cover(lt[i],c.w);if(v>bv){bv=v;bi=i}}
+        if(bi<0)continue;const run=[bi];while(run[run.length-1]+1<lt.length&&cover(lt[run[run.length-1]+1],c.w)>=.5)run.push(run[run.length-1]+1);
+        const step=(c.e-c.s)/run.length;run.forEach((i,k)=>{S.lyrView[i].s=c.s+k*step;S.lyrView[i].e=c.s+(k+1)*step;placed++});p=run[run.length-1]+1}
+    }
+    renderLyrics();$('#lInst').hidden=!S.lyr.length;
+    msg(placed?`Listo: ${placed} líneas de la letra ubicadas en el audio (las que suenan quedan marcadas).`:'No logré ubicar la letra en este audio.');
+  }catch(e){msg(e.message==='cancel'?'Cancelado.':e.message==='nomatch'?'No logré ubicar la letra en el audio: lo que se escucha no coincide con esta letra. Prueba con otra opción o con “Reconocer con IA”.':'No pude sincronizar ('+(e.message||'error')+').')}
+  $('#lSync').disabled=false;$('#lCancel').hidden=true;
+}
 function renderLyrics(){
-  $('#lyrics').innerHTML=(S.lyr||[]).map((l,i)=>`<button class="lline" data-i="${i}"><span>${fmtT(l.s)}</span>${esc(l.t)}</button>`).join('');S.lyrOn=-1;
+  const v=S.lyrView||[],anyT=v.some(l=>l.s!=null);
+  $('#lyrics').innerHTML=v.map((l,i)=>l.s!=null?`<button class="lline" data-i="${i}"><span>${fmtT(l.s)}</span>${esc(l.t)}</button>`:`<div class="lline${anyT?' out':''}" data-i="${i}"><span></span>${esc(l.t)}</div>`).join('');
+  S.lyrOn=-1;S.lyr=v.filter(l=>l.s!=null);$('#lInst').hidden=!S.lyr.length;$('#lCopy').hidden=!v.length;
 }
 function hlLyric(){
-  if(!S.lyr||!S.lyr.length)return;let on=-1;
-  if(playT>=0&&(mode==='orig'||mode==='inst'||mode==='voz'))on=S.lyr.findIndex(l=>playT>=l.s&&playT<l.e);
-  if(on===S.lyrOn)return;const els=document.querySelectorAll('.lline');if(els[S.lyrOn])els[S.lyrOn].classList.remove('on');
-  if(els[on]){els[on].classList.add('on');const box=$('#lyrics');const el=els[on];if(el.offsetTop<box.scrollTop||el.offsetTop>box.scrollTop+box.clientHeight-50)box.scrollTop=el.offsetTop-box.clientHeight/3}
+  const v=S.lyrView;if(!v||!S.lyr||!S.lyr.length)return;let on=-1;
+  if(playT>=0&&(mode==='orig'||mode==='inst'||mode==='voz'))on=v.findIndex(l=>l.s!=null&&playT>=l.s&&playT<l.e);
+  if(on===S.lyrOn)return;const els=document.querySelectorAll('#lyrics .lline');if(els[S.lyrOn])els[S.lyrOn].classList.remove('on');
+  if(els[on]){els[on].classList.add('on');const box=$('#lyrics'),el=els[on];if(el.offsetTop<box.scrollTop||el.offsetTop>box.scrollTop+box.clientHeight-50)box.scrollTop=el.offsetTop-box.clientHeight/3}
   S.lyrOn=on;
 }
 async function analyzeLyrics(){
   if(!S.buf)return;const msg=t=>$('#lMsg').textContent=t,b0=S.buf;$('#lGo').disabled=true;$('#lCancel').hidden=false;
-  try{
-    const useVoc=S.aiVoc&&S.aiFor===b0;let src;
-    if(useVoc){const [vL,vR]=S.aiVoc,n=vL.length,mono=new Float32Array(n);for(let i=0;i<n;i++)mono[i]=(vL[i]+vR[i])/2;src=newBuf([mono],AI.sr)}else src=b0;
-    msg(useVoc?'Usando la voz separada con IA…':'Preparando el audio…');
-    const oc=new OfflineAudioContext(1,Math.ceil(src.duration*16000),16000),s=oc.createBufferSource();s.buffer=src;s.connect(oc.destination);s.start();
-    const x=(await oc.startRendering()).getChannelData(0);
-    const lang=$('#lLang').value,out=await asrJob(x.slice(),lang,msg),dur=src.duration;if(S.buf!==b0)return;
-    S.lyr=(out.chunks||[]).map(c=>{const a=c.timestamp[0]??0,b=c.timestamp[1]??Math.min(dur,a+4);return {s:a,e:Math.max(b,a+.3),t:(c.text||'').trim()}}).filter(c=>c.t&&!HALLU.test(c.t)&&!/^[\[(♪].*[\])♪]$/.test(c.t));
-    renderLyrics();$('#lInst').hidden=!S.lyr.length;
-    msg(S.lyr.length?`Encontré ${S.lyr.length} frases cantadas. Toca una para escucharla.`+(useVoc?'':' Si la letra sale con errores, crea primero el instrumental con IA y vuelve a analizar.'):'No encontré letra cantada en esta canción.');
-  }catch(e){msg(e.message==='cancel'?'Cancelado.':'No pude analizar la letra ('+(e.message||'error')+'). Revisa tu conexión e intenta de nuevo.')}
+  try{msg('Preparando el audio…');const {x,dur,useVoc}=await asrAudio(b0),out=await asrJob(x,$('#lLang').value,msg);if(S.buf!==b0)return;
+    S.lrFull=null;$('#lSync').hidden=true;$('#lOther').hidden=true;
+    S.lyrView=(out.chunks||[]).map(c=>{const a=c.timestamp[0]??0,b=c.timestamp[1]??Math.min(dur,a+4);return {s:a,e:Math.max(b,a+.3),t:(c.text||'').trim()}}).filter(c=>c.t&&!HALLU.test(c.t)&&!/^[\[(♪].*[\])♪]$/.test(c.t));
+    renderLyrics();
+    msg(S.lyr.length?`Reconocí ${S.lyr.length} frases (puede tener errores; para la letra exacta usa “Buscar letra”).`:'No reconocí letra cantada en esta canción.');
+  }catch(e){msg(e.message==='cancel'?'Cancelado.':'No pude reconocer la letra ('+(e.message||'error')+'). Revisa tu conexión e intenta de nuevo.')}
   $('#lGo').disabled=false;$('#lCancel').hidden=true;
 }
 async function buildGuided(){
@@ -514,8 +606,13 @@ async function makeGuided(){
 $('#lGo').addEventListener('click',analyzeLyrics);
 $('#lCancel').addEventListener('click',()=>{cancelLane('lyr');$('#lMsg').textContent='Cancelando…'});
 $('#lInst').addEventListener('click',makeGuided);
-$('#lyrics').addEventListener('click',e=>{const b=e.target.closest('.lline');if(b)play(S.inst?'inst':'orig',S.lyr[+b.dataset.i].s)});
-$('#lCopy').addEventListener('click',async()=>{const t=(S.lyr||[]).map(l=>l.t).join('\n');try{await navigator.clipboard.writeText(t);$('#lCopy').textContent='Copiada'}catch(e){$('#lCopy').textContent='No se pudo copiar'}setTimeout(()=>$('#lCopy').textContent='Copiar letra',1600)});
+$('#lyrics').addEventListener('click',e=>{const b=e.target.closest('button.lline');if(b){const l=S.lyrView[+b.dataset.i];if(l&&l.s!=null)play(S.inst?'inst':'orig',l.s)}});
+$('#lFind').addEventListener('click',()=>findLyrics(false));
+$('#lName').addEventListener('keydown',e=>{if(e.key==='Enter')findLyrics(false)});$('#lArtist').addEventListener('keydown',e=>{if(e.key==='Enter')findLyrics(false)});
+$('#lRes').addEventListener('click',e=>{const b=e.target.closest('.spit');if(b)useLyrics(S.lrRes[+b.dataset.i])});
+$('#lOther').addEventListener('click',()=>{$('#lMsg').textContent='Elige la letra correcta:';showLrList()});
+$('#lSync').addEventListener('click',syncLyrics);
+$('#lCopy').addEventListener('click',async()=>{const t=(S.lyrView||[]).map(l=>l.t).join('\n');try{await navigator.clipboard.writeText(t);$('#lCopy').textContent='Copiada'}catch(e){$('#lCopy').textContent='No se pudo copiar'}setTimeout(()=>$('#lCopy').textContent='Copiar letra',1600)});
 // Grabación con micrófono
 let rec=null;
 function yinLive(b,sr){const N=1024,tMin=Math.floor(sr/1400),tMax=Math.min(Math.ceil(sr/62),b.length-N-1);let e=0;for(let j=0;j<N;j++)e+=b[j]*b[j];if(Math.sqrt(e/N)<0.008)return 0;
@@ -607,7 +704,7 @@ function spMore(){
 async function spPick(x){
   setStatus('Descargando vista previa…');$('#fname').textContent=x.trackName+' — '+x.artistName;
   try{const r=await fetch(x.previewUrl);if(!r.ok)throw 0;const buf=await decode(await r.arrayBuffer());
-    await useBuffer(buf,x.trackName+' — '+x.artistName+' (30 s)');document.querySelector('.stage').scrollIntoView({behavior:'smooth'})}
+    S.trackNext={name:x.trackName,artist:x.artistName,dur:(x.trackTimeMillis||0)/1000,preview:true};await useBuffer(buf,x.trackName+' — '+x.artistName+' (30 s)');findLyrics(true);document.querySelector('.stage').scrollIntoView({behavior:'smooth'})}
   catch(e){setStatus('No pude descargar la vista previa. Usa ● Grabar mientras suena la canción.',true)}
 }
 async function spHandle(input){
