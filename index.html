@@ -419,26 +419,53 @@ const SPRE=/https?:\/\/(?:open\.spotify\.com|spotify\.link|spotify\.app\.link)\/
 const esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function openSp(msg){$('#sp').hidden=false;if(msg)$('#spMsg').textContent=msg;$('#sp').scrollIntoView({behavior:'smooth',block:'start'})}
 async function spTitle(url){try{const r=await fetch('https://open.spotify.com/oembed?url='+encodeURIComponent(url));if(!r.ok)return '';const j=await r.json();return j.title||''}catch(e){return ''}}
-const SHOW=15;let spSeq=0;
-const norm=t=>String(t||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+const SHOW=15;let spSeq=0;const spCache=new Map();
+const norm=t=>String(t||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^\p{L}\p{N}]+/gu,' ').replace(/\s+/g,' ').trim();
+// Palabras que Apple Music suele escribir distinto (en inglés o abreviadas)
+const SYN={acustico:'acoustic',acustica:'acoustic',vivo:'live','en vivo':'live',directo:'live',version:'version',instrumental:'instrumental',remezcla:'remix',remasterizado:'remastered',remasterizada:'remastered',sesion:'session',desenchufado:'unplugged',feat:'',ft:'',con:''};
+const STOP=new Set(['el','la','los','las','de','del','y','a','en','the','of','and','version','feat','ft']);
+const toks=t=>norm(t).split(' ').filter(w=>w&&!STOP.has(w));
+const expand=w=>{const s=SYN[w];return s?[w,s]:[w]};
 async function spFetch(q,attr,country){
   const u='https://itunes.apple.com/search?media=music&entity=song&limit=200&country='+country+'&term='+encodeURIComponent(q)+(attr?'&attribute='+attr:'');
-  try{const r=await fetch(u);if(!r.ok)return [];return (await r.json()).results||[]}catch(e){return []}
+  if(spCache.has(u))return spCache.get(u);
+  try{const r=await fetch(u);if(!r.ok)return [];const res=(await r.json()).results||[];spCache.set(u,res);return res}catch(e){return []}
+}
+function variants(q){
+  const raw=String(q).trim(),clean=raw.replace(/[()[\]{}"“”'’«»]/g,' ').replace(/\s[-–—|·:]\s|\s[-–—]|[-–—]\s/g,' ').replace(/\s+/g,' ').trim();
+  const v=new Set([clean]);
+  const plain=norm(clean);if(plain&&plain!==norm(raw))v.add(plain);
+  const tr=norm(clean).replace(/\ben vivo\b/g,'live').split(' ').map(w=>SYN[w]===undefined?w:SYN[w]).filter(Boolean).join(' ');if(tr&&tr!==norm(clean))v.add(tr);
+  // Solo el título: lo que va antes de " - " o del paréntesis (ej. "Noviembre - Acústico" → "Noviembre")
+  const main=raw.split(/\s[-–—|]\s|[([]/)[0].trim();if(main&&norm(main)!==norm(clean)&&main.length>1)v.add(main);
+  return [...v].slice(0,4);
+}
+function scoreOf(x,qt,qn){
+  const t=norm(x.trackName),c=norm(x.trackCensoredName),a=norm(x.artistName),al=norm(x.collectionName),all=' '+t+' '+a+' '+al+' ',title=' '+t+' ';
+  if(t===qn||c===qn)return 100;if((t+' '+a)===qn||(a+' '+t)===qn)return 95;
+  let hit=0,inTitle=0;for(const w of qt){const ws=expand(w);if(ws.some(z=>all.includes(' '+z+' ')||all.includes(' '+z)))hit++;if(ws.some(z=>title.includes(' '+z+' ')||title.includes(' '+z)))inTitle++}
+  const n=qt.length||1;let s=hit/n*60+inTitle/n*25;
+  if(qt.length&&toks(x.trackName).every(w=>qt.some(q=>expand(q).includes(w))))s+=10;
+  if(t.startsWith(qt[0]||'#'))s+=5;
+  return s;
 }
 async function spSearch(q){
   const my=++spSeq,mode=$('#spMode').value,attr={song:'songTerm',artist:'artistTerm'}[mode]||'';
   $('#spRes').innerHTML='<p class="spmsg">Buscando…</p>';
-  const reg=((navigator.language||'').split('-')[1]||'CL').toUpperCase();
-  const lists=await Promise.all([...new Set([reg,'US'])].map(c=>spFetch(q,attr,c)));
-  if(my!==spSeq)return;
+  const reg=((navigator.language||'').split('-')[1]||'CL').toUpperCase(),stores=[...new Set([reg,'US'])];
+  const vs=variants(q),jobs=[];
+  for(const v of vs)for(const c of stores)jobs.push(spFetch(v,attr,c));
+  // Si se busca solo por nombre de canción, el título corto también se busca en todo (álbum incluido, ej. "Acústico")
+  if(attr&&vs.length>1)jobs.push(spFetch(vs[vs.length-1],'',stores[0]));
+  const lists=await Promise.all(jobs);if(my!==spSeq)return;
   const seen=new Set(),it=[];
-  for(const l of lists)for(const x of l){if(!x.previewUrl)continue;const k=norm(x.trackName)+'|'+norm(x.artistName);if(seen.has(k))continue;seen.add(k);it.push(x)}
-  if(!it.length){$('#spRes').innerHTML=lists.every(l=>!l.length)&&!navigator.onLine?'<p class="spmsg">Sin conexión. Puedes usar ● Grabar mientras suena.</p>':'<p class="spmsg">No encontré canciones con ese nombre. Prueba con otra forma de escribirlo o cambia “Buscar en”.</p>';return}
-  // Las que coinciden exactamente con el nombre buscado van primero
-  const nq=norm(q),score=x=>{const t=norm(x.trackName),a=norm(x.artistName),c=norm(x.trackCensoredName);
-    if(t===nq||c===nq)return 0;if((t+' '+a)===nq||(a+' '+t)===nq)return 1;if(t.startsWith(nq))return 2;if(nq.includes(t))return 3;if(t.includes(nq))return 4;return 5};
-  it.forEach((x,i)=>x._o=i);it.sort((a,b)=>score(a)-score(b)||a._o-b._o);
-  S.spItems=it;S.spShown=0;$('#spRes').innerHTML=`<p class="spmsg" style="margin:0">${it.length} canciones encontradas. Elige la correcta:</p><div id="spList"></div><button class="btn" id="spMore" type="button">Ver más</button>`;
+  for(const l of lists)for(const x of l){if(!x.previewUrl)continue;const k=norm(x.trackName)+'|'+norm(x.artistName)+'|'+norm(x.collectionName);if(seen.has(k))continue;seen.add(k);it.push(x)}
+  if(!it.length){$('#spRes').innerHTML=!navigator.onLine?'<p class="spmsg">Sin conexión. Puedes usar ● Grabar mientras suena.</p>':'<p class="spmsg">No encontré canciones con ese nombre. Prueba solo con el título, o con el título y el artista, y revisa “Buscar en”.</p>';return}
+  const qt=toks(q),qn=norm(q);
+  it.forEach((x,i)=>{x._o=i;x._s=scoreOf(x,qt,qn)});it.sort((a,b)=>b._s-a._s||a._o-b._o);
+  const good=it.filter(x=>x._s>=50).length;
+  S.spItems=it;S.spShown=0;
+  $('#spRes').innerHTML=`<p class="spmsg" style="margin:0">${good?`${good} coinciden con lo que buscaste`:'No hubo coincidencias exactas; estas son las más parecidas'} (${it.length} resultados en total). Elige la correcta:</p><div id="spList"></div><button class="btn" id="spMore" type="button">Ver más</button>`;
   spMore();
 }
 function spMore(){
@@ -467,7 +494,7 @@ $('#spBtn').addEventListener('click',()=>{openSp();$('#spQ').focus()});
 $('#spX').addEventListener('click',()=>{$('#sp').hidden=true});
 $('#spForm').addEventListener('submit',e=>{e.preventDefault();spHandle($('#spQ').value)});
 $('#spMode').addEventListener('change',()=>{const q=$('#spQ').value.trim();if(q&&!SPRE.test(q))spSearch(q)});
-let spT=0;$('#spQ').addEventListener('input',e=>{clearTimeout(spT);const q=e.target.value.trim();if(q.length<2||SPRE.test(q))return;spT=setTimeout(()=>spSearch(q),450)});
+let spT=0;$('#spQ').addEventListener('input',e=>{clearTimeout(spT);const q=e.target.value.trim();if(q.length<2||SPRE.test(q))return;spT=setTimeout(()=>spSearch(q),700)});
 $('#spRes').addEventListener('click',e=>{if(e.target.closest('#spMore')){spMore();return}const b=e.target.closest('.spit');if(b&&S.spItems)spPick(S.spItems[+b.dataset.i])});
 // Audio compartido desde otra app (Android)
 async function sharedFile(){
