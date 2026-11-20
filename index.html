@@ -67,6 +67,7 @@ input[type=range]{width:100%;accent-color:var(--acc);height:32px}
 #sp{padding-top:0}
 .inst{border:1.5px solid var(--line);border-radius:18px;padding:16px 18px;background:var(--card)}
 .ihead{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;justify-content:space-between}.ihead>div{flex:1 1 300px}
+.ihint{display:block;color:var(--mut);font-size:13px}.chk{display:flex;align-items:center;gap:10px;min-height:44px;font-weight:600;font-size:15px;margin-top:6px;cursor:pointer}.chk input{width:22px;height:22px;accent-color:var(--acc)}
 .ibtns{display:flex;flex-wrap:wrap;gap:10px;margin:6px 0 12px}.ilab{font-weight:600;font-size:15px;display:block}
 @media(min-width:980px){.inst{grid-column:1/-1}}
 @media(max-width:600px){.ibtns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.ibtns .btn{padding:0 8px;font-size:15px}.ihead .btn{width:100%}}
@@ -160,8 +161,9 @@ body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bot
   <section class="inst">
     <div class="ihead"><div><h2 style="margin:0">Instrumental</h2><p class="spmsg" id="iMsg"></p></div><button class="btn pri" id="iMake" disabled>Crear instrumental</button></div>
     <div id="iCtl" hidden>
-      <div class="ibtns"><button class="btn" id="iPlay">▶ Instrumental</button><button class="btn" id="iVoz">▶ Voz aprox.</button><button class="btn" id="iSave">Guardar instrumental</button><button class="btn" id="iNotes">Notas de la voz</button></div>
-      <label for="iAmt" class="ilab">Cuánta voz quitar: <span id="vAmt">100</span>%</label><input id="iAmt" type="range" min="0" max="100" value="100">
+      <div class="ibtns"><button class="btn" id="iPlay">▶ Instrumental</button><button class="btn" id="iVoz">▶ Voz aprox.</button><button class="btn" id="iSave">Guardar</button><button class="btn" id="iNotes">Notas de la voz</button></div>
+      <label for="iAmt" class="ilab">Intensidad: <span id="vAmt">85</span>%</label><input id="iAmt" type="range" min="0" max="100" value="85"><small class="ihint">Más alta quita más voz, pero puede apagar un poco otros instrumentos que estén al centro.</small>
+      <label class="chk"><input type="checkbox" id="iMel"> Mantener la melodía de la voz tocada por un instrumento</label>
     </div>
   </section>
   <section class="res">
@@ -305,7 +307,7 @@ function tone(m,when,d,vol=.22){const a=getAC(),o=a.createOscillator(),g=a.creat
 function follow(){if(!S.geo)return;const px=GUT+playT*S.geo.sc,sl=wrap.scrollLeft,vw=wrap.clientWidth;if(px>sl+vw-60||px<sl+GUT)wrap.scrollLeft=Math.max(0,px-GUT-40)}
 async function play(kind){
   stop();if(!S.buf)return;const a=getAC();try{await a.resume()}catch(e){}const now=a.currentTime+.06;let end;
-  const bb={orig:S.buf,inst:S.inst,voz:S.voz}[kind];
+  const bb={orig:S.buf,inst:curInst(),voz:S.voz}[kind];
   if(bb){const s=a.createBufferSource();s.buffer=bb;s.connect(a.destination);s.start(now);src.push(s);end=bb.duration}
   else{if(!S.notes.length)return;for(const n of S.notes)src.push(tone(n.midi,now+n.t,Math.max(.08,n.d)));const l=S.notes[S.notes.length-1];end=l.t+l.d}
   mode=kind;t0=now;updBtns();
@@ -343,31 +345,86 @@ document.addEventListener('dragleave',e=>{if(!e.relatedTarget)document.body.clas
 document.addEventListener('drop',e=>{e.preventDefault();document.body.classList.remove('drop');loadFile(e.dataTransfer.files[0])});
 document.addEventListener('keydown',e=>{if(e.code!=='Space'||/INPUT|BUTTON|SUMMARY/.test(e.target.tagName))return;e.preventDefault();if(rec)stopRec();else if(mode)stop();else if(S.buf)play('orig')});
 
-// Instrumental: quitar la voz (lo que está al centro de la mezcla estéreo)
-function resetInst(){S.inst=null;S.voz=null;$('#iCtl').hidden=true;$('#iMake').disabled=!S.buf;$('#iMake').hidden=false;
-  $('#iMsg').textContent='Quita la voz de la canción para dejar solo la música. Funciona con canciones en estéreo (como las de Spotify o Apple Music).'}
+// Instrumental: quitar la voz
+// Separación espectral: quita lo que está al centro y es tonal (la voz); deja batería, bajo y lo que va a los lados
+function makeFFT(N){const lev=Math.log2(N),rev=new Uint32Array(N),cs=new Float64Array(N/2),sn=new Float64Array(N/2);
+  for(let i=0;i<N;i++){let r=0;for(let b=0;b<lev;b++)r|=((i>>b)&1)<<(lev-1-b);rev[i]=r}
+  for(let i=0;i<N/2;i++){cs[i]=Math.cos(2*Math.PI*i/N);sn[i]=Math.sin(2*Math.PI*i/N)}
+  return (re,im,inv)=>{
+    for(let i=0;i<N;i++){const j=rev[i];if(j>i){let t=re[i];re[i]=re[j];re[j]=t;t=im[i];im[i]=im[j];im[j]=t}}
+    for(let size=2;size<=N;size<<=1){const h=size>>1,step=N/size;
+      for(let i=0;i<N;i+=size)for(let j=0,k=0;j<h;j++,k+=step){const a=i+j,b=a+h,c=cs[k],s=inv?sn[k]:-sn[k],tr=re[b]*c-im[b]*s,ti=re[b]*s+im[b]*c;re[b]=re[a]-tr;im[b]=im[a]-ti;re[a]+=tr;im[a]+=ti}}
+    if(inv)for(let i=0;i<N;i++){re[i]/=N;im[i]/=N}}}
+const med=(a,n)=>{for(let i=1;i<n;i++){const v=a[i];let j=i-1;while(j>=0&&a[j]>v){a[j+1]=a[j];j--}a[j+1]=v}return a[n>>1]};
+async function separateSpec(Lx,Rx,sr,amount,onProg){
+  const N=4096,H=1024,K=N/2+1,T=9,D=4,F=4,fft=makeFFT(N),len=Lx.length;
+  const win=new Float64Array(N);for(let i=0;i<N;i++)win[i]=Math.sqrt(0.5-0.5*Math.cos(2*Math.PI*i/N));
+  const oL=new Float32Array(len),oR=new Float32Array(len);
+  const ring=[];for(let t=0;t<T;t++)ring.push({lr:new Float64Array(K),li:new Float64Array(K),rr:new Float64Array(K),ri:new Float64Array(K),cm:new Float64Array(K),c:new Float64Array(K),pos:0});
+  const fw=new Float64Array(K);for(let k=0;k<K;k++){const f=k*sr/N;fw[k]=f<90?0:f<160?(f-90)/70:f<9000?1:f<14000?1-(f-9000)/5000:0}
+  const th=0.9-0.32*amount,strength=Math.min(1,0.45+amount*0.75),hpow=amount>0.9?0.5:1;
+  const re=new Float64Array(N),im=new Float64Array(N),tt=new Float64Array(T),tf=new Float64Array(2*F+1);
+  const frames=Math.ceil((len+N-H)/H)+D;
+  for(let f=0;f<frames;f++){
+    const slot=ring[f%T],start=f*H-(N-H);slot.pos=start;
+    for(let i=0;i<N;i++){const p=start+i;if(p>=0&&p<len){re[i]=Lx[p]*win[i];im[i]=Rx[p]*win[i]}else{re[i]=0;im[i]=0}}
+    fft(re,im,false);
+    for(let k=0;k<K;k++){const nk=(N-k)%N,zr=re[k],zi=im[k],wr=re[nk],wi=-im[nk];
+      const lr=(zr+wr)/2,li=(zi+wi)/2,rr=(zi-wi)/2,ri=-(zr-wr)/2;
+      slot.lr[k]=lr;slot.li[k]=li;slot.rr[k]=rr;slot.ri[k]=ri;
+      const pl=lr*lr+li*li,pr=rr*rr+ri*ri,psi=2*(lr*rr+li*ri)/(pl+pr+1e-20);
+      const c=Math.max(0,Math.min(1,(psi-th)/(1-th)));slot.c[k]=c;
+      const mr=(lr+rr)/2,mi=(li+ri)/2;slot.cm[k]=Math.sqrt(mr*mr+mi*mi)*c}
+    const g=f-D;if(g<0)continue;const cur=ring[g%T];
+    for(let k=0;k<K;k++){
+      let rem=0;
+      if(fw[k]>0&&cur.c[k]>0){
+        for(let t=0;t<T;t++)tt[t]=ring[t].cm[k];const mt=med(tt,T);
+        let n=0;for(let q=k-F;q<=k+F;q++)if(q>=0&&q<K)tf[n++]=cur.cm[q];const mf=med(tf,n);
+        let hm=mt*mt/(mt*mt+mf*mf+1e-20);if(hpow!==1)hm=Math.pow(hm,hpow);
+        rem=strength*cur.c[k]*hm*fw[k];
+      }
+      const gk=1-rem,lr=cur.lr[k]*gk,li=cur.li[k]*gk,rr=cur.rr[k]*gk,ri=cur.ri[k]*gk;
+      re[k]=lr-ri;im[k]=li+rr;
+      if(k>0&&k<N/2){re[N-k]=lr+ri;im[N-k]=rr-li}
+    }
+    fft(re,im,true);
+    const p0=cur.pos;for(let i=0;i<N;i++){const p=p0+i;if(p>=0&&p<len){oL[p]+=re[i]*win[i]*0.5;oR[p]+=im[i]*win[i]*0.5}}
+    if(onProg&&g%48===0){onProg(g/(frames-D));await new Promise(r=>setTimeout(r))}
+  }
+  return [oL,oR];
+}
+function resetInst(){S.inst=null;S.voz=null;S.instMel=null;$('#iCtl').hidden=true;$('#iMake').disabled=!S.buf;$('#iMake').hidden=false;$('#iMel').checked=false;
+  $('#iMsg').textContent='Quita la voz de la canción y deja la música. Funciona con canciones en estéreo (como las de Spotify o Apple Music).'}
 function isMono(buf){if(buf.numberOfChannels<2)return true;const L=buf.getChannelData(0),R=buf.getChannelData(1),st=Math.max(1,Math.floor(L.length/200000));let s=0,m=0;
   for(let i=0;i<L.length;i+=st){const a=L[i],b=R[i];s+=(a-b)*(a-b);m+=(a+b)*(a+b)}return s<m*0.002}
-async function separate(buf,amt,voice){
-  const oc=new OfflineAudioContext(2,buf.length,buf.sampleRate),src=oc.createBufferSource(),sp=oc.createChannelSplitter(2),mg=oc.createChannelMerger(2);
-  const g=v=>{const n=oc.createGain();n.gain.value=v;return n},bq=(t,f)=>{const b=oc.createBiquadFilter();b.type=t;b.frequency.value=f;b.Q.value=.707;return b};
-  const chain=(a,...ns)=>{let p=a;for(const n of ns){p.connect(n);p=n}return p};
-  src.buffer=buf;src.connect(sp);
-  const mid=g(1),side=g(1),lm=g(.5),rm=g(.5),ls=g(.5),rs=g(-.5);
-  sp.connect(lm,0);sp.connect(rm,1);lm.connect(mid);rm.connect(mid);sp.connect(ls,0);sp.connect(rs,1);ls.connect(side);rs.connect(side);
-  const mOut=g(1);
-  if(voice){chain(mid,bq('highpass',150),bq('highpass',150),bq('lowpass',7500),bq('lowpass',7500),mOut);mOut.connect(mg,0,0);mOut.connect(mg,0,1)}
-  else{const keep=g(1-amt),filt=g(amt);chain(mid,keep,mOut);chain(mid,bq('lowpass',150),bq('lowpass',150),filt);chain(mid,bq('highpass',7500),bq('highpass',7500),filt);filt.connect(mOut);
-    const sL=g(1),sR=g(-1);side.connect(sL);side.connect(sR);mOut.connect(mg,0,0);sL.connect(mg,0,0);mOut.connect(mg,0,1);sR.connect(mg,0,1)}
-  mg.connect(oc.destination);src.start();return oc.startRendering();
+const newBuf=(chs,sr)=>{const b=getAC().createBuffer(chs.length,chs[0].length,sr);chs.forEach((c,i)=>b.getChannelData(i).set(c));return b};
+async function buildInst(){
+  const b=S.buf,L=b.getChannelData(0),R=b.getChannelData(1),amt=+$('#iAmt').value/100;
+  const [oL,oR]=await separateSpec(L,R,b.sampleRate,amt,p=>{$('#iMsg').textContent='Quitando la voz… '+Math.round(p*100)+'%'});
+  const vL=new Float32Array(L.length),vR=new Float32Array(L.length);for(let i=0;i<L.length;i++){vL[i]=L[i]-oL[i];vR[i]=R[i]-oR[i]}
+  S.inst=newBuf([oL,oR],b.sampleRate);S.voz=newBuf([vL,vR],b.sampleRate);S.instMel=null;
 }
+// Melodía de la voz tocada por un instrumento, mezclada con el instrumental
+async function buildMel(){
+  const A=await analyze(await toMono(S.voz)),notes=segment(A,+$('#sens').value/100,+$('#minD').value/1000),b=S.inst,sr=b.sampleRate;
+  const oc=new OfflineAudioContext(2,b.length,sr),src=oc.createBufferSource();src.buffer=b;src.connect(oc.destination);src.start();
+  let pk=0;for(let c=0;c<2;c++){const d=b.getChannelData(c);for(let i=0;i<d.length;i+=64)pk=Math.max(pk,Math.abs(d[i]))}
+  const vol=Math.min(.35,Math.max(.12,pk*.45)),bus=oc.createGain();bus.gain.value=vol;bus.connect(oc.destination);
+  for(const n of notes){const t=n.t,d=Math.max(.1,n.d),f=440*2**((n.midi-69)/12),o=oc.createOscillator(),o2=oc.createOscillator(),g=oc.createGain(),g2=oc.createGain(),vib=oc.createOscillator(),vg=oc.createGain();
+    o.type='triangle';o.frequency.value=f;o2.type='sine';o2.frequency.value=f*2;g2.gain.value=.18;vib.frequency.value=5;vg.gain.value=f*.004;vib.connect(vg);vg.connect(o.frequency);
+    o.connect(g);o2.connect(g2);g2.connect(g);g.connect(bus);
+    g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(1,t+.03);g.gain.setValueAtTime(1,t+Math.max(.04,d-.06));g.gain.linearRampToValueAtTime(0,t+d+.04);
+    [o,o2,vib].forEach(x=>{x.start(t);x.stop(t+d+.06)})}
+  S.instMel=await oc.startRendering();return notes.length;
+}
+const curInst=()=>$('#iMel').checked&&S.instMel?S.instMel:S.inst;
 async function makeInst(){
   if(!S.buf)return;stop();
   if(isMono(S.buf)){$('#iMsg').textContent='Este audio es mono (o casi): la voz no se puede separar con este método. Funciona con canciones en estéreo, como las de Spotify o Apple Music; las grabaciones del celular suelen ser mono.';return}
-  $('#iMake').disabled=true;$('#iMsg').textContent='Creando instrumental…';
-  try{S.inst=await separate(S.buf,+$('#iAmt').value/100);S.voz=await separate(S.buf,1,true);
-    $('#iCtl').hidden=false;$('#iMake').hidden=true;
-    $('#iMsg').textContent='Listo. Se quitó lo que suena al centro de la mezcla (casi siempre la voz). Pueden quedar restos de voz o eco, y algunos instrumentos centrados también bajan un poco.'}
+  $('#iMake').disabled=true;
+  try{await buildInst();$('#iCtl').hidden=false;$('#iMake').hidden=true;
+    $('#iMsg').textContent='Listo. Se quitó lo que suena al centro y es tonal (la voz); la batería, el bajo y los instrumentos se mantienen. Si aún se oye algo de voz, sube la intensidad.'}
   catch(e){$('#iMsg').textContent='No pude procesar este audio.';$('#iMake').disabled=false}
 }
 function wav(buf){const ch=buf.numberOfChannels,n=buf.length,sr=buf.sampleRate,ab=new ArrayBuffer(44+n*ch*2),v=new DataView(ab),w=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i))};
@@ -383,10 +440,14 @@ async function save(buf,label){
 $('#iMake').addEventListener('click',makeInst);
 $('#iPlay').addEventListener('click',()=>mode==='inst'?stop():play('inst'));
 $('#iVoz').addEventListener('click',()=>mode==='voz'?stop():play('voz'));
-$('#iSave').addEventListener('click',()=>S.inst&&save(S.inst,'instrumental'));
+$('#iSave').addEventListener('click',()=>S.inst&&save(curInst(),$('#iMel').checked&&S.instMel?'instrumental con melodia':'instrumental'));
 $('#iNotes').addEventListener('click',async()=>{if(!S.voz)return;stop();setStatus('Analizando la voz…');S.A=await analyze(await toMono(S.voz));resegment();setStatus(S.notes.length+' notas detectadas en la voz')});
+$('#iMel').addEventListener('change',async e=>{if(!S.inst)return;const was=mode==='inst';stop();
+  if(e.target.checked&&!S.instMel){$('#iMsg').textContent='Pasando la melodía de la voz a un instrumento…';try{const n=await buildMel();$('#iMsg').textContent=`Listo: la melodía de la voz (${n} notas) ahora la toca un instrumento.`}catch(err){$('#iMsg').textContent='No pude crear la melodía.';e.target.checked=false}}
+  if(was)play('inst')});
 $('#iAmt').addEventListener('input',e=>$('#vAmt').textContent=e.target.value);
-$('#iAmt').addEventListener('change',async e=>{if(!S.buf||!S.inst)return;const was=mode==='inst';stop();$('#iMsg').textContent='Actualizando…';S.inst=await separate(S.buf,e.target.value/100);$('#iMsg').textContent='Instrumental actualizado.';if(was)play('inst')});
+$('#iAmt').addEventListener('change',async()=>{if(!S.buf||!S.inst)return;const was=mode==='inst',mel=$('#iMel').checked;stop();await buildInst();
+  if(mel){$('#iMsg').textContent='Actualizando la melodía…';await buildMel()}$('#iMsg').textContent='Instrumental actualizado.';if(was)play('inst')});
 // Grabación con micrófono
 let rec=null;
 function yinLive(b,sr){const N=1024,tMin=Math.floor(sr/1400),tMax=Math.min(Math.ceil(sr/62),b.length-N-1);let e=0;for(let j=0;j<N;j++)e+=b[j]*b[j];if(Math.sqrt(e/N)<0.008)return 0;
