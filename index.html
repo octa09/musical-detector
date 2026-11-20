@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Detector de notas</title>
+<meta name="theme-color" content="#2f4cff">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Notas">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* VOICE: claro y práctico, una herramienta de músico que se usa ya.
+   IDEA: un rollo de piano (piano roll) donde la melodía queda escrita como barras.
+   PICTURE: el rollo grande arriba, con la curva de afinación y las notas detectadas.
+   COLOUR and TYPE: blanco, tinta casi negra, un azul eléctrico como acento; Outfit + Inter.
+   LAYOUT: título y botones, rollo, reproducción, secuencia grande, fichas de notas, ajustes. */
+:root{color-scheme:light dark;--bg:light-dark(#ffffff,#0e1014);--ink:light-dark(#121417,#eef0f5);--mut:light-dark(#5b616e,#9aa1b0);--acc:light-dark(#2f4cff,#7f97ff);--soft:light-dark(#eaeeff,#1b2242);--line:light-dark(#e3e6ee,#262b36);--row:light-dark(#f3f4f8,#151820);--card:light-dark(#ffffff,#141720)}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 Inter,system-ui,sans-serif;overflow-x:clip}
+.band{padding:clamp(18px,3vw,40px) max(4vw,16px);max-width:1320px;margin:0 auto}
+h1,h2{font-family:Outfit,Inter,sans-serif;font-weight:700;line-height:1.05;text-wrap:balance;margin:0}
+h1{font-size:clamp(32px,4.5vw,48px)}h2{font-size:20px;margin-bottom:10px}
+.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:16px 40px;padding-bottom:20px}
+.intro{flex:1 1 420px}.lead{color:var(--mut);margin:8px 0 0;max-width:62ch}
+.actions{max-width:440px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:flex-end;flex:0 1 auto}
+.hint{flex-basis:100%;margin:0;color:var(--mut);font-size:13px;text-align:end}
+.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.btn{font:600 16px Inter,sans-serif;min-height:44px;padding:0 18px;border-radius:12px;border:1.5px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px;white-space:nowrap}
+.btn:hover:not([disabled]){border-color:var(--acc)}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+.btn:focus-visible,.chip:focus-visible,input:focus-visible,.seg button:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.btn[disabled]{opacity:.45;cursor:default}
+.btn.on{background:var(--soft);border-color:var(--acc)}
+.upl{position:relative;overflow:hidden}#file{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;font-size:100px}
+.upl:focus-within{outline:3px solid var(--acc);outline-offset:2px}
+.layout{display:grid;grid-template-columns:minmax(0,1fr);gap:28px;padding-top:0}
+.stage{border:1.5px solid var(--line);border-radius:18px;overflow:hidden;background:var(--card)}
+.meta{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 16px;padding:12px 16px;border-bottom:1.5px solid var(--line);font-size:14px}
+#fname{font-weight:600;overflow-wrap:anywhere}#status{color:var(--mut)}#status.err{color:#d6283b}
+#roll{position:relative;height:clamp(280px,40vh,380px);overflow-x:auto;overflow-y:hidden}
+#cv{display:block}
+.transport{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;justify-content:space-between;padding:12px 16px;border-top:1.5px solid var(--line)}
+.tbtns{display:flex;flex-wrap:wrap;gap:10px}
+.keys{color:var(--mut);font-size:13px;margin-inline-start:auto}
+.seg{display:inline-flex;border:1.5px solid var(--line);border-radius:12px;overflow:hidden}
+.seg button{font:600 15px Inter,sans-serif;min-height:41px;padding:0 14px;border:0;background:transparent;color:var(--ink);cursor:pointer}
+.seg button.on{background:var(--ink);color:var(--bg)}
+#seq{font-family:Outfit,sans-serif;font-weight:500;font-size:clamp(22px,2.6vw,30px);line-height:1.3;word-spacing:.25em;margin:4px 0 22px}
+.stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 14px}
+.stat{border-top:2px solid var(--ink);padding-top:8px}.stat small{color:var(--mut);font-size:13px;display:block}.stat b{font-size:20px;font-family:Outfit,sans-serif}
+#chips{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:8px}
+.chip{font:inherit;text-align:start;border:1.5px solid var(--line);background:var(--card);color:var(--ink);border-radius:12px;padding:8px 12px;cursor:pointer;min-height:44px}
+.chip:hover{border-color:var(--acc)}
+.chip b{display:block;font-family:Outfit,sans-serif;font-size:20px}.chip span{font-size:13px;color:var(--mut);white-space:nowrap}
+.chip.on{border-color:var(--acc);background:var(--soft)}
+details{border-top:1.5px solid var(--line);margin-top:24px;padding-top:10px}
+summary{font-weight:600;cursor:pointer;min-height:44px;display:flex;align-items:center}
+.set{display:grid;gap:18px;margin-top:6px}
+.set label{display:block;font-weight:600;font-size:15px}.set small{color:var(--mut);display:block;font-size:13px}
+input[type=range]{width:100%;accent-color:var(--acc);height:32px}
+.note{color:var(--mut);font-size:14px;margin-top:18px;max-width:70ch}
+.drop .stage{outline:3px dashed var(--acc);outline-offset:4px}
+[hidden]{display:none!important}
+#sp{padding-top:0}
+.inst{border:1.5px solid var(--line);border-radius:18px;padding:16px 18px;background:var(--card)}
+.ihead{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;justify-content:space-between}.ihead>div{flex:1 1 300px}
+.ibtns{display:flex;flex-wrap:wrap;gap:10px;margin:6px 0 12px}.ilab{font-weight:600;font-size:15px;display:block}
+@media(min-width:980px){.inst{grid-column:1/-1}}
+@media(max-width:600px){.ibtns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.ibtns .btn{padding:0 8px;font-size:15px}.ihead .btn{width:100%}}
+.sppanel{border:1.5px solid #1db954;border-radius:18px;padding:16px 18px;background:var(--card)}
+.spmsg{margin:10px 0}.sp{color:light-dark(#128a3e,#3ddc78)}
+.spform{display:flex;gap:10px;flex-wrap:wrap}
+.spform input{flex:1 1 220px;font:16px Inter,sans-serif;min-height:44px;padding:0 14px;border-radius:12px;border:1.5px solid var(--line);background:var(--bg);color:var(--ink)}
+#spRes{display:grid;gap:8px;margin-top:12px}
+.spit{display:flex;align-items:center;gap:12px;text-align:start;font:inherit;color:var(--ink);background:var(--bg);border:1.5px solid var(--line);border-radius:12px;padding:8px;cursor:pointer;min-height:56px}
+.spit:hover{border-color:var(--acc)}.spit img{width:48px;height:48px;border-radius:8px;flex:none}
+a.btn{text-decoration:none}.spit b{display:block}.spit small{color:var(--mut)}
+#probe{position:absolute;visibility:hidden}
+.rec{color:#d6283b}.rec.on{background:#d6283b;border-color:#d6283b;color:#fff}
+#live{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;background:var(--card);z-index:2}
+#live[hidden]{display:none}
+#liveN{font-family:Outfit,sans-serif;font-size:clamp(64px,14vw,120px);line-height:1;color:var(--acc)}
+#liveT{font-weight:600}#liveF{color:var(--mut);font-size:14px;min-height:1.4em}
+.instbar{display:flex;align-items:center;gap:10px;padding:10px max(4vw,16px);background:var(--soft);font-size:15px}
+.instbar[hidden]{display:none}.instbar span{flex:1}
+.instbar .btn{min-height:40px;padding:0 14px}
+/* Computador */
+body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
+@media(min-width:980px){
+  .layout{grid-template-columns:minmax(0,1fr) 320px;align-items:start;gap:28px 36px}
+  .stage{grid-column:1/-1}
+  #roll{height:clamp(340px,50vh,520px)}
+  .side{position:sticky;top:20px;border:1.5px solid var(--line);border-radius:18px;padding:20px}
+  #chips{grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}
+}
+@media(min-width:601px) and (max-width:979px){.stats{grid-template-columns:repeat(4,minmax(0,1fr))}.set{grid-template-columns:1fr 1fr}}
+/* Celular */
+@media(max-width:600px){
+  .desk{display:none}
+  .actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}
+  .actions .btn{padding:0 10px;font-size:15px}
+  .hint{text-align:start}
+  .meta{padding:10px 12px}
+  #roll{height:300px}
+  .transport{padding:10px 12px}
+  .tbtns{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));width:100%;gap:8px}
+  .tbtns .btn{padding:0 6px;font-size:15px}
+  .seg{width:100%}.seg button{flex:1}
+  #chips{grid-template-columns:repeat(auto-fill,minmax(96px,1fr))}
+  .chip b{font-size:18px}
+}
+@media(hover:none){.desk.keys{display:none}}
+</style></head><body>
+<span id="probe"></span>
+<div id="inst" class="instbar" hidden><span id="instTxt">Instala la app para abrirla desde tu pantalla de inicio.</span><button class="btn pri" id="instBtn" hidden>Instalar</button><button class="btn" id="instX" aria-label="Cerrar">✕</button></div>
+<header class="band top">
+  <div class="intro">
+    <h1>Detector de notas</h1>
+    <p class="lead">Sube una melodía (voz, silbido, flauta, guitarra o piano tocando una nota a la vez) y verás qué notas tiene, cuándo suenan y cuánto duran.</p>
+  </div>
+  <div class="actions">
+    <span class="btn pri upl">Subir audio<input id="file" type="file" aria-label="Subir audio"></span>
+    <button class="btn rec" id="rec">● Grabar</button>
+    <button class="btn sp" id="spBtn">Spotify</button>
+    <button class="btn" id="demo">Ejemplo</button>
+    <p class="hint desk">También puedes arrastrar un archivo de audio aquí.</p>
+  </div>
+</header>
+<section id="sp" class="band" hidden>
+  <div class="sppanel">
+    <div class="bar" style="justify-content:space-between"><h2 style="margin:0">Canción desde Spotify</h2><button class="btn" id="spX" aria-label="Cerrar">✕</button></div>
+    <p id="spMsg" class="spmsg">Pega el enlace de Spotify o escribe el nombre de la canción y el artista.</p>
+    <form id="spForm" class="spform"><input id="spQ" type="search" placeholder="Enlace de Spotify o “canción artista”" autocomplete="off"><button class="btn pri">Buscar</button></form>
+    <div id="spRes"></div>
+    <p class="note">Spotify no deja que otras apps lean sus canciones. Por eso se busca la vista previa de 30 segundos de la misma canción en el catálogo de Apple Music y se analiza esa. Si no aparece, pon la canción en otro aparato o parlante y usa ● Grabar. En una canción completa (voz e instrumentos) se detecta la nota dominante, así que el resultado es aproximado.</p>
+    <a class="btn" id="spOpen" href="https://open.spotify.com" target="_blank" rel="noopener" hidden>Abrir en Spotify</a>
+  </div>
+</section>
+<main class="band layout">
+  <div class="stage">
+    <div class="meta"><span id="fname">Sin audio</span><span id="status">Listo</span></div>
+    <div id="roll"><canvas id="cv"></canvas><div id="live" hidden><b id="liveN">…</b><span id="liveT">Grabando 0:00</span><small id="liveF"></small></div></div>
+    <div class="transport">
+      <div class="tbtns">
+        <button class="btn" id="pOrig" disabled>▶ Original</button>
+        <button class="btn" id="pNotes" disabled><span>▶ Notas<span class="desk"> detectadas</span></span></button>
+        <button class="btn" id="pStop" disabled>■ Parar</button>
+      </div>
+      <span class="keys desk">Barra espaciadora: reproducir o parar</span>
+      <div class="seg" role="group" aria-label="Notación"><button id="nEs" class="on">Do Re Mi</button><button id="nEn">C D E</button></div>
+    </div>
+  </div>
+  <section class="inst">
+    <div class="ihead"><div><h2 style="margin:0">Instrumental</h2><p class="spmsg" id="iMsg"></p></div><button class="btn pri" id="iMake" disabled>Crear instrumental</button></div>
+    <div id="iCtl" hidden>
+      <div class="ibtns"><button class="btn" id="iPlay">▶ Instrumental</button><button class="btn" id="iVoz">▶ Voz aprox.</button><button class="btn" id="iSave">Guardar instrumental</button><button class="btn" id="iNotes">Notas de la voz</button></div>
+      <label for="iAmt" class="ilab">Cuánta voz quitar: <span id="vAmt">100</span>%</label><input id="iAmt" type="range" min="0" max="100" value="100">
+    </div>
+  </section>
+  <section class="res">
+    <h2>Melodía detectada</h2>
+    <p id="seq">—</p>
+    <div class="bar" style="justify-content:space-between;margin-bottom:10px"><h2 style="margin:0">Notas una por una</h2><button class="btn" id="copy">Copiar lista</button></div>
+    <div id="chips"></div>
+  </section>
+  <aside class="side">
+    <div class="stats">
+      <div class="stat"><small>Notas</small><b id="sN">0</b></div>
+      <div class="stat"><small>Rango</small><b id="sR">—</b></div>
+      <div class="stat"><small>Tonalidad probable</small><b id="sK">—</b></div>
+      <div class="stat"><small>Duración del audio</small><b id="sD">—</b></div>
+    </div>
+    <details id="adj">
+      <summary>Ajustes de detección</summary>
+      <div class="set">
+        <div><label for="sens">Sensibilidad <span id="vSens">60</span></label><input id="sens" type="range" min="0" max="100" value="60"><small>Súbela si se pierden notas suaves; bájala si aparecen notas por ruido de fondo.</small></div>
+        <div><label for="minD">Duración mínima de nota <span id="vMin">90</span> ms</label><input id="minD" type="range" min="30" max="300" step="10" value="90"><small>Las notas más cortas que esto se descartan. Súbela si salen notas “fantasma”.</small></div>
+      </div>
+    </details>
+    <p class="note">Funciona mejor con melodías de una sola voz y poco ruido. Con canciones completas (acordes, batería, varios instrumentos) detecta solo el sonido dominante y puede equivocarse. Desde Spotify: toca Compartir en una canción y elige “Notas” (Android), o pega el enlace con el botón Spotify. Con “Grabar” cantas o tocas directo al micrófono; al detener, se analiza la grabación. En Android, con la app instalada, puedes compartir un audio desde WhatsApp u otra app y elegir “Notas”.</p>
+  </aside>
+</main>
+<script>
+{
+const $=s=>document.querySelector(s);
+const ES=['Do','Do♯','Re','Re♯','Mi','Fa','Fa♯','Sol','Sol♯','La','La♯','Si'],EN=['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'];
+const MAJ=[6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88],MIN=[6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
+let notation='es';
+const pcName=p=>(notation==='es'?ES:EN)[(p%12+12)%12];
+const nm=m=>pcName(m)+(Math.floor(m/12)-1);
+const SR=11025,W=512,HOP=192,TMIN=Math.floor(SR/1400),TMAX=Math.ceil(SR/62);
+let ac=null;const getAC=()=>{if(!ac)ac=new (window.AudioContext||window.webkitAudioContext)();return ac};
+const S={buf:null,A:null,notes:[],mm:null,dur:0,sel:-1,geo:null};
+const statusEl=$('#status');
+const setStatus=(t,err)=>{statusEl.textContent=t;statusEl.classList.toggle('err',!!err)};
+const decode=ab=>new Promise((res,rej)=>{try{const p=getAC().decodeAudioData(ab,res,rej);if(p&&p.catch)p.catch(rej)}catch(e){rej(e)}});
+
+async function toMono(buf){
+  try{const len=Math.max(1,Math.ceil(buf.duration*SR));const oc=new OfflineAudioContext(1,len,SR);const s=oc.createBufferSource();s.buffer=buf;s.connect(oc.destination);s.start();return (await oc.startRendering()).getChannelData(0)}
+  catch(e){const ch=buf.numberOfChannels,ratio=buf.sampleRate/SR,len=Math.floor(buf.length/ratio),out=new Float32Array(len),data=[];
+    for(let c=0;c<ch;c++)data.push(buf.getChannelData(c));
+    for(let i=0;i<len;i++){const a=Math.floor(i*ratio),b=Math.max(a+1,Math.floor((i+1)*ratio));let s=0;for(let c=0;c<ch;c++)for(let j=a;j<b;j++)s+=data[c][j]||0;out[i]=s/(ch*(b-a))}
+    return out}
+}
+// YIN: frecuencia fundamental por cuadro
+async function analyze(x){
+  const n=Math.max(0,Math.floor((x.length-W-TMAX)/HOP)),f0=new Float32Array(n),rms=new Float32Array(n),d=new Float32Array(TMAX+1);
+  for(let i=0;i<n;i++){
+    const o=i*HOP;let e=0;for(let j=0;j<W;j++){const v=x[o+j];e+=v*v}rms[i]=Math.sqrt(e/W);
+    let run=0;d[0]=1;
+    for(let t=1;t<=TMAX;t++){let s=0;for(let j=0;j<W;j++){const df=x[o+j]-x[o+j+t];s+=df*df}run+=s;d[t]=run?s*t/run:1}
+    let tau=-1,best=1,bestT=-1;
+    for(let t=TMIN;t<=TMAX;t++){if(d[t]<0.15){while(t<TMAX&&d[t+1]<d[t])t++;tau=t;break}if(d[t]<best){best=d[t];bestT=t}}
+    if(tau<0&&best<0.3)tau=bestT;
+    if(tau>0){const a=d[tau-1],b=d[tau],c=tau<TMAX?d[tau+1]:b,den=a-2*b+c,sh=den?0.5*(a-c)/den:0;f0[i]=SR/(tau+sh)}
+    if(i%300===0){setStatus('Analizando… '+Math.round(i/n*100)+'%');await new Promise(r=>setTimeout(r))}
+  }
+  return {f0,rms,hop:HOP/SR,off:W/2/SR};
+}
+function segment(A,sens,minDur){
+  const {f0,rms,hop,off}=A,n=f0.length;let mx=0;for(const v of rms)if(v>mx)mx=v;
+  const gate=mx*(0.015+0.22*(1-sens)),m=new Float32Array(n).fill(NaN),r=new Array(n).fill(null);
+  for(let i=0;i<n;i++)if(f0[i]>0&&rms[i]>gate)m[i]=69+12*Math.log2(f0[i]/440);
+  for(let i=0;i<n;i++){if(m[i]!==m[i])continue;const w=[];for(let k=-2;k<=2;k++){const j=i+k;if(j<0||j>=n)continue;if(m[j]===m[j])w.push(m[j])}
+    if(w.length>=3){w.sort((a,b)=>a-b);r[i]=Math.round(w[w.length>>1])}}
+  const minF=Math.max(1,Math.round(minDur/hop)),raw=[];let cur=null;
+  const rise=i=>{if(i<4||i>=n)return false;let lo=Infinity;for(let k=1;k<=4;k++)lo=Math.min(lo,rms[i-k]);return rms[i]>lo*1.8};
+  for(let i=0;i<=n;i++){
+    const v=i<n?r[i]:null;let onset=false;
+    if(cur&&v!==null&&cur.len>minF)onset=rise(i);
+    if(cur&&(v!==cur.midi||onset)){if(cur.len>=minF)raw.push(cur);cur=null}
+    if(v!==null&&!cur)cur={midi:v,start:i,len:0,c:0,on:onset||rise(i)||rise(i-1)||rise(i-2)};
+    if(cur){cur.len++;cur.c+=m[i]-v}
+  }
+  const out=[];
+  for(const b of raw){const a=out[out.length-1];
+    const g0=a?a.start+a.len:0;let quiet=false;if(a)for(let j=g0;j<b.start;j++)if(rms[j]<=gate*1.3){quiet=true;break}
+    if(a&&a.midi===b.midi&&!b.on&&!quiet&&b.start-g0<=minF){a.c+=b.c;a.len=b.start+b.len-a.start}else out.push(b)}
+  S.mm=m;
+  return out.map(b=>({midi:b.midi,t:b.start*hop+off,d:b.len*hop,cents:Math.round(b.c/b.len*100)}));
+}
+function keyOf(N){
+  if(N.length<4)return '—';const w=new Array(12).fill(0);for(const n of N)w[n.midi%12]+=n.d;
+  const corr=(p,s)=>{let mx=0,mp=0;for(let i=0;i<12;i++){mx+=w[i];mp+=p[i]}mx/=12;mp/=12;let num=0,a=0,b=0;
+    for(let i=0;i<12;i++){const x=w[(i+s)%12]-mx,y=p[i]-mp;num+=x*y;a+=x*x;b+=y*y}return num/Math.sqrt(a*b||1)};
+  let best=-2,k='—';for(let s=0;s<12;s++){const c1=corr(MAJ,s),c2=corr(MIN,s);if(c1>best){best=c1;k=pcName(s)+' mayor'}if(c2>best){best=c2;k=pcName(s)+' menor'}}
+  return k;
+}
+function resegment(){if(!S.A)return;S.notes=segment(S.A,+$('#sens').value/100,+$('#minD').value/1000);S.sel=-1;render()}
+function render(){
+  const N=S.notes;
+  $('#seq').textContent=S.A?(N.length?N.map(n=>nm(n.midi)).join(' '):'No encontré notas claras. Prueba subir la sensibilidad.'):'—';
+  $('#sN').textContent=N.length;
+  if(N.length){const ms=N.map(n=>n.midi);$('#sR').textContent=nm(Math.min(...ms))+' – '+nm(Math.max(...ms))}else $('#sR').textContent='—';
+  $('#sK').textContent=keyOf(N);$('#sD').textContent=S.buf?S.dur.toFixed(1)+' s':'—';
+  $('#chips').innerHTML=N.map((n,i)=>`<button class="chip${i===S.sel?' on':''}" data-i="${i}" title="Afinación ${n.cents>0?'+':''}${n.cents} cents"><b>${nm(n.midi)}</b><span>${n.t.toFixed(2)} s · ${Math.round(n.d*1000)} ms</span></button>`).join('');
+  ['#pOrig','#pNotes'].forEach(s=>$(s).disabled=!S.buf);
+  draw();
+}
+// Rollo de piano
+const wrap=$('#roll'),cv=$('#cv'),ctx=cv.getContext('2d'),probe=$('#probe');
+const col=v=>{probe.style.color=`var(${v})`;return getComputedStyle(probe).color};
+const PPS=120,GUT=56,BLACK=[1,3,6,8,10];let playT=-1;
+function draw(){
+  const vw=wrap.clientWidth,H=wrap.clientHeight,dur=S.dur||4,Wd=Math.max(vw,Math.ceil(dur*PPS)+GUT+24),dpr=window.devicePixelRatio||1;
+  if(cv.width!==Math.round(Wd*dpr)||cv.height!==Math.round(H*dpr)){cv.width=Math.round(Wd*dpr);cv.height=Math.round(H*dpr);cv.style.width=Wd+'px';cv.style.height=H+'px'}
+  ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,Wd,H);
+  const C={ink:col('--ink'),mut:col('--mut'),acc:col('--acc'),row:col('--row'),line:col('--line'),card:col('--card')};
+  const N=S.notes;let lo=57,hi=72;
+  if(N.length){lo=Math.min(...N.map(n=>n.midi))-2;hi=Math.max(...N.map(n=>n.midi))+2;while(hi-lo<12){lo--;hi++}}
+  const AX=24,rh=(H-AX)/(hi-lo+1),sc=(Wd-GUT-24)/dur,x=t=>GUT+t*sc,y=m=>(hi-m)*rh;
+  S.geo={lo,hi,rh,sc};
+  for(let m=lo;m<=hi;m++){if(BLACK.includes((m%12+12)%12)){ctx.fillStyle=C.row;ctx.fillRect(0,y(m),Wd,rh)}if(m%12===0){ctx.fillStyle=C.line;ctx.fillRect(0,y(m)+rh-1,Wd,1)}}
+  ctx.font='12px Inter,sans-serif';ctx.textBaseline='middle';
+  const step=dur>60?10:dur>20?5:1;
+  for(let t=0;t<=dur;t+=step){ctx.fillStyle=C.line;ctx.fillRect(x(t),0,1,H-AX);ctx.fillStyle=C.mut;ctx.fillText(t+' s',x(t)+4,H-AX/2)}
+  if(S.mm&&S.A){ctx.fillStyle=C.mut;ctx.globalAlpha=.55;const {hop,off}=S.A;
+    for(let i=0;i<S.mm.length;i++){const v=S.mm[i];if(v===v&&v>lo-1&&v<hi+1)ctx.fillRect(x(i*hop+off)-1,y(v)+rh/2-1,2,2)}ctx.globalAlpha=1}
+  N.forEach((n,i)=>{const bx=x(n.t),bw=Math.max(3,n.d*sc-2),bh=Math.max(6,rh*.78),by=y(n.midi)+(rh-bh)/2;
+    ctx.fillStyle=C.acc;ctx.beginPath();ctx.roundRect?ctx.roundRect(bx,by,bw,bh,Math.min(6,bh/2)):ctx.rect(bx,by,bw,bh);ctx.fill();
+    if(i===S.sel){ctx.strokeStyle=C.ink;ctx.lineWidth=2.5;ctx.stroke()}
+    const lab=nm(n.midi);if(rh>=13&&ctx.measureText(lab).width+10<bw){ctx.fillStyle='#fff';ctx.fillText(lab,bx+5,by+bh/2+.5)}});
+  if(playT>=0){ctx.fillStyle=C.ink;ctx.fillRect(x(playT),0,2,H-AX)}
+  const sl=wrap.scrollLeft;ctx.fillStyle=C.card;ctx.fillRect(sl,0,GUT,H);ctx.fillStyle=C.line;ctx.fillRect(sl+GUT-1,0,1,H);
+  for(let m=lo;m<=hi;m++){const pc=(m%12+12)%12;if(rh>=11||pc===0||(rh>=6&&!BLACK.includes(pc))){ctx.fillStyle=pc===0?C.ink:C.mut;ctx.fillText(nm(m),sl+6,y(m)+rh/2)}}
+}
+wrap.addEventListener('scroll',()=>requestAnimationFrame(draw));
+const ro=new ResizeObserver(()=>draw());ro.observe(wrap);
+cv.addEventListener('click',e=>{if(!S.geo)return;const r=cv.getBoundingClientRect(),px=e.clientX-r.left,py=e.clientY-r.top,{hi,rh,sc}=S.geo;
+  const m=Math.round(hi-py/rh+.5-.5),t=(px-GUT)/sc;const i=S.notes.findIndex(n=>t>=n.t-.05&&t<=n.t+n.d+.05&&Math.abs(n.midi-(hi-Math.floor(py/rh)))<=1);if(i>=0)pick(i,false)});
+// Reproducción
+let src=[],raf=0,t0=0,mode='';
+function updBtns(){$('#pStop').disabled=!mode;$('#pOrig').classList.toggle('on',mode==='orig');$('#pNotes').classList.toggle('on',mode==='notes');const ip=$('#iPlay'),iv=$('#iVoz');if(ip){ip.classList.toggle('on',mode==='inst');ip.textContent=mode==='inst'?'■ Instrumental':'▶ Instrumental';iv.classList.toggle('on',mode==='voz');iv.textContent=mode==='voz'?'■ Voz aprox.':'▶ Voz aprox.'}}
+function stop(){src.forEach(s=>{try{s.stop()}catch(e){}});src=[];cancelAnimationFrame(raf);playT=-1;mode='';updBtns();draw()}
+function tone(m,when,d,vol=.22){const a=getAC(),o=a.createOscillator(),g=a.createGain();o.type='triangle';o.frequency.value=440*2**((m-69)/12);
+  g.gain.setValueAtTime(0,when);g.gain.linearRampToValueAtTime(vol,when+.015);g.gain.setValueAtTime(vol,when+Math.max(.03,d-.06));g.gain.linearRampToValueAtTime(0,when+d);
+  o.connect(g);g.connect(a.destination);o.start(when);o.stop(when+d+.03);return o}
+function follow(){if(!S.geo)return;const px=GUT+playT*S.geo.sc,sl=wrap.scrollLeft,vw=wrap.clientWidth;if(px>sl+vw-60||px<sl+GUT)wrap.scrollLeft=Math.max(0,px-GUT-40)}
+async function play(kind){
+  stop();if(!S.buf)return;const a=getAC();try{await a.resume()}catch(e){}const now=a.currentTime+.06;let end;
+  const bb={orig:S.buf,inst:S.inst,voz:S.voz}[kind];
+  if(bb){const s=a.createBufferSource();s.buffer=bb;s.connect(a.destination);s.start(now);src.push(s);end=bb.duration}
+  else{if(!S.notes.length)return;for(const n of S.notes)src.push(tone(n.midi,now+n.t,Math.max(.08,n.d)));const l=S.notes[S.notes.length-1];end=l.t+l.d}
+  mode=kind;t0=now;updBtns();
+  const tick=()=>{playT=Math.max(0,a.currentTime-t0);if(playT>end+.15){stop();return}follow();draw();raf=requestAnimationFrame(tick)};raf=requestAnimationFrame(tick);
+}
+async function pick(i,scroll){S.sel=i;const n=S.notes[i];render();if(scroll&&S.geo)wrap.scrollLeft=Math.max(0,GUT+n.t*S.geo.sc-wrap.clientWidth/2);
+  if(!mode){const a=getAC();try{await a.resume()}catch(e){}tone(n.midi,a.currentTime+.02,Math.min(.8,Math.max(.25,n.d)))}}
+// Carga de audio
+async function useBuffer(buf,name){stop();S.buf=buf;S.name=name;S.dur=buf.duration;resetInst();S.A=null;S.mm=null;S.notes=[];$('#fname').textContent=name;setStatus('Preparando audio…');render();
+  if(buf.duration>600)setStatus('Audio largo: el análisis puede tardar un poco…');
+  const x=await toMono(buf);S.A=await analyze(x);resegment();setStatus(S.notes.length+' notas detectadas');wrap.scrollLeft=0}
+async function loadFile(f){if(!f)return;setStatus('Leyendo '+f.name+'…');
+  try{const buf=await decode(await f.arrayBuffer());await useBuffer(buf,f.name)}catch(e){setStatus('No pude leer ese archivo. Prueba con MP3, WAV, M4A u OGG.',true)}}
+const TW=[[60,1],[60,1],[67,1],[67,1],[69,1],[69,1],[67,2],[65,1],[65,1],[64,1],[64,1],[62,1],[62,1],[60,2]];
+async function demo(){
+  const q=.42,sr=44100,tot=TW.reduce((s,n)=>s+n[1],0)*q+.7,oc=new OfflineAudioContext(1,Math.ceil(tot*sr),sr);let t=.3;
+  for(const [m,b] of TW){const d=b*q,f=440*2**((m-69)/12),o=oc.createOscillator(),o2=oc.createOscillator(),g=oc.createGain(),g2=oc.createGain();
+    o.type='triangle';o.frequency.value=f;o2.frequency.value=f*2;g2.gain.value=.25;o2.connect(g2);g2.connect(g);o.connect(g);g.connect(oc.destination);
+    g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.5,t+.02);g.gain.exponentialRampToValueAtTime(.16,t+d*.85);g.gain.linearRampToValueAtTime(0,t+d*.92);
+    o.start(t);o2.start(t);o.stop(t+d);o2.stop(t+d);t+=d}
+  await useBuffer(await oc.startRendering(),'Ejemplo: Estrellita (sintetizada)');
+}
+$('#file').addEventListener('change',e=>{loadFile(e.target.files[0]);e.target.value=''});
+$('#demo').addEventListener('click',()=>demo().catch(()=>setStatus('No se pudo generar el ejemplo en este navegador.',true)));
+$('#pOrig').addEventListener('click',()=>play('orig'));$('#pNotes').addEventListener('click',()=>play('notes'));$('#pStop').addEventListener('click',stop);
+$('#chips').addEventListener('click',e=>{const b=e.target.closest('.chip');if(b)pick(+b.dataset.i,true)});
+const setNot=v=>{notation=v;$('#nEs').classList.toggle('on',v==='es');$('#nEn').classList.toggle('on',v==='en');render()};
+$('#nEs').addEventListener('click',()=>setNot('es'));$('#nEn').addEventListener('click',()=>setNot('en'));
+$('#sens').addEventListener('input',e=>{$('#vSens').textContent=e.target.value;resegment()});
+$('#minD').addEventListener('input',e=>{$('#vMin').textContent=e.target.value;resegment()});
+$('#copy').addEventListener('click',async()=>{const txt='Nota\tInicio (s)\tDuración (s)\n'+S.notes.map(n=>`${nm(n.midi)}\t${n.t.toFixed(2)}\t${n.d.toFixed(2)}`).join('\n');
+  try{await navigator.clipboard.writeText(txt);$('#copy').textContent='Copiado'}catch(e){$('#copy').textContent='No se pudo copiar'}setTimeout(()=>$('#copy').textContent='Copiar lista',1600)});
+document.addEventListener('dragover',e=>{e.preventDefault();document.body.classList.add('drop')});
+document.addEventListener('dragleave',e=>{if(!e.relatedTarget)document.body.classList.remove('drop')});
+document.addEventListener('drop',e=>{e.preventDefault();document.body.classList.remove('drop');loadFile(e.dataTransfer.files[0])});
+document.addEventListener('keydown',e=>{if(e.code!=='Space'||/INPUT|BUTTON|SUMMARY/.test(e.target.tagName))return;e.preventDefault();if(rec)stopRec();else if(mode)stop();else if(S.buf)play('orig')});
+
+// Instrumental: quitar la voz (lo que está al centro de la mezcla estéreo)
+function resetInst(){S.inst=null;S.voz=null;$('#iCtl').hidden=true;$('#iMake').disabled=!S.buf;$('#iMake').hidden=false;
+  $('#iMsg').textContent='Quita la voz de la canción para dejar solo la música. Funciona con canciones en estéreo (como las de Spotify o Apple Music).'}
+function isMono(buf){if(buf.numberOfChannels<2)return true;const L=buf.getChannelData(0),R=buf.getChannelData(1),st=Math.max(1,Math.floor(L.length/200000));let s=0,m=0;
+  for(let i=0;i<L.length;i+=st){const a=L[i],b=R[i];s+=(a-b)*(a-b);m+=(a+b)*(a+b)}return s<m*0.002}
+async function separate(buf,amt,voice){
+  const oc=new OfflineAudioContext(2,buf.length,buf.sampleRate),src=oc.createBufferSource(),sp=oc.createChannelSplitter(2),mg=oc.createChannelMerger(2);
+  const g=v=>{const n=oc.createGain();n.gain.value=v;return n},bq=(t,f)=>{const b=oc.createBiquadFilter();b.type=t;b.frequency.value=f;b.Q.value=.707;return b};
+  const chain=(a,...ns)=>{let p=a;for(const n of ns){p.connect(n);p=n}return p};
+  src.buffer=buf;src.connect(sp);
+  const mid=g(1),side=g(1),lm=g(.5),rm=g(.5),ls=g(.5),rs=g(-.5);
+  sp.connect(lm,0);sp.connect(rm,1);lm.connect(mid);rm.connect(mid);sp.connect(ls,0);sp.connect(rs,1);ls.connect(side);rs.connect(side);
+  const mOut=g(1);
+  if(voice){chain(mid,bq('highpass',150),bq('highpass',150),bq('lowpass',7500),bq('lowpass',7500),mOut);mOut.connect(mg,0,0);mOut.connect(mg,0,1)}
+  else{const keep=g(1-amt),filt=g(amt);chain(mid,keep,mOut);chain(mid,bq('lowpass',150),bq('lowpass',150),filt);chain(mid,bq('highpass',7500),bq('highpass',7500),filt);filt.connect(mOut);
+    const sL=g(1),sR=g(-1);side.connect(sL);side.connect(sR);mOut.connect(mg,0,0);sL.connect(mg,0,0);mOut.connect(mg,0,1);sR.connect(mg,0,1)}
+  mg.connect(oc.destination);src.start();return oc.startRendering();
+}
+async function makeInst(){
+  if(!S.buf)return;stop();
+  if(isMono(S.buf)){$('#iMsg').textContent='Este audio es mono (o casi): la voz no se puede separar con este método. Funciona con canciones en estéreo, como las de Spotify o Apple Music; las grabaciones del celular suelen ser mono.';return}
+  $('#iMake').disabled=true;$('#iMsg').textContent='Creando instrumental…';
+  try{S.inst=await separate(S.buf,+$('#iAmt').value/100);S.voz=await separate(S.buf,1,true);
+    $('#iCtl').hidden=false;$('#iMake').hidden=true;
+    $('#iMsg').textContent='Listo. Se quitó lo que suena al centro de la mezcla (casi siempre la voz). Pueden quedar restos de voz o eco, y algunos instrumentos centrados también bajan un poco.'}
+  catch(e){$('#iMsg').textContent='No pude procesar este audio.';$('#iMake').disabled=false}
+}
+function wav(buf){const ch=buf.numberOfChannels,n=buf.length,sr=buf.sampleRate,ab=new ArrayBuffer(44+n*ch*2),v=new DataView(ab),w=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i))};
+  w(0,'RIFF');v.setUint32(4,36+n*ch*2,true);w(8,'WAVE');w(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,ch,true);v.setUint32(24,sr,true);v.setUint32(28,sr*ch*2,true);v.setUint16(32,ch*2,true);v.setUint16(34,16,true);w(36,'data');v.setUint32(40,n*ch*2,true);
+  const d=[];for(let c=0;c<ch;c++)d.push(buf.getChannelData(c));let o=44;
+  for(let i=0;i<n;i++)for(let c=0;c<ch;c++){const s=Math.max(-1,Math.min(1,d[c][i]));v.setInt16(o,s<0?s*32768:s*32767,true);o+=2}
+  return new Blob([ab],{type:'audio/wav'})}
+async function save(buf,label){
+  const name=(S.name||'cancion').replace(/[\\/:*?"<>|]+/g,'').slice(0,60)+' - '+label+'.wav',f=new File([wav(buf)],name,{type:'audio/wav'});
+  if(/Android|iPhone|iPad/.test(navigator.userAgent)&&navigator.canShare&&navigator.canShare({files:[f]})){try{await navigator.share({files:[f],title:name});return}catch(e){if(e.name==='AbortError')return}}
+  const u=URL.createObjectURL(f),a=document.createElement('a');a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),5000);
+}
+$('#iMake').addEventListener('click',makeInst);
+$('#iPlay').addEventListener('click',()=>mode==='inst'?stop():play('inst'));
+$('#iVoz').addEventListener('click',()=>mode==='voz'?stop():play('voz'));
+$('#iSave').addEventListener('click',()=>S.inst&&save(S.inst,'instrumental'));
+$('#iNotes').addEventListener('click',async()=>{if(!S.voz)return;stop();setStatus('Analizando la voz…');S.A=await analyze(await toMono(S.voz));resegment();setStatus(S.notes.length+' notas detectadas en la voz')});
+$('#iAmt').addEventListener('input',e=>$('#vAmt').textContent=e.target.value);
+$('#iAmt').addEventListener('change',async e=>{if(!S.buf||!S.inst)return;const was=mode==='inst';stop();$('#iMsg').textContent='Actualizando…';S.inst=await separate(S.buf,e.target.value/100);$('#iMsg').textContent='Instrumental actualizado.';if(was)play('inst')});
+// Grabación con micrófono
+let rec=null;
+function yinLive(b,sr){const N=1024,tMin=Math.floor(sr/1400),tMax=Math.min(Math.ceil(sr/62),b.length-N-1);let e=0;for(let j=0;j<N;j++)e+=b[j]*b[j];if(Math.sqrt(e/N)<0.008)return 0;
+  const d=new Float32Array(tMax+1);let run=0;d[0]=1;for(let t=1;t<=tMax;t++){let s=0;for(let j=0;j<N;j++){const df=b[j]-b[j+t];s+=df*df}run+=s;d[t]=run?s*t/run:1}
+  for(let t=tMin;t<=tMax;t++)if(d[t]<0.15){while(t<tMax&&d[t+1]<d[t])t++;const a=d[t-1],c=d[t+1]??d[t],den=a-2*d[t]+c;return sr/(t+(den?0.5*(a-c)/den:0))}return 0}
+async function startRec(){
+  stop();const a=getAC();try{await a.resume()}catch(e){}
+  if(!navigator.mediaDevices||!window.MediaRecorder){setStatus('Este navegador no permite grabar. Usa “Subir audio”.',true);return}
+  let stream;try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}})}
+  catch(e){setStatus('No pude usar el micrófono. Revisa el permiso en los ajustes del teléfono.',true);return}
+  const an=a.createAnalyser();an.fftSize=4096;const msrc=a.createMediaStreamSource(stream);msrc.connect(an);
+  const mr=new MediaRecorder(stream),chunks=[];mr.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
+  mr.onstop=async()=>{stream.getTracks().forEach(t=>t.stop());msrc.disconnect();$('#live').hidden=true;
+    const blob=new Blob(chunks,{type:mr.mimeType||'audio/webm'});
+    try{await useBuffer(await decode(await blob.arrayBuffer()),'Grabación '+new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'}))}
+    catch(e){setStatus('No pude leer la grabación. Intenta de nuevo.',true)}};
+  mr.start(250);const b=new Float32Array(an.fftSize),st=performance.now();let last=0;
+  $('#live').hidden=false;$('#rec').classList.add('on');$('#rec').textContent='■ Detener';setStatus('Grabando…');
+  const loop=t=>{if(t-last>45){last=t;an.getFloatTimeDomainData(b);const f=yinLive(b,a.sampleRate);
+      if(f){const m=69+12*Math.log2(f/440),r=Math.round(m),c=Math.round((m-r)*100);$('#liveN').textContent=nm(r);$('#liveF').textContent=`${f.toFixed(1)} Hz · ${c>0?'+':''}${c} cents`}
+      else{$('#liveN').textContent='…';$('#liveF').textContent=''}
+      const sec=Math.floor((performance.now()-st)/1000);$('#liveT').textContent=`Grabando ${Math.floor(sec/60)}:${String(sec%60).padStart(2,'0')}`}
+    rec.raf=requestAnimationFrame(loop)};
+  rec={mr,raf:requestAnimationFrame(loop)};
+}
+function stopRec(){if(!rec)return;cancelAnimationFrame(rec.raf);try{rec.mr.stop()}catch(e){}rec=null;$('#rec').classList.remove('on');$('#rec').textContent='● Grabar';setStatus('Procesando grabación…')}
+$('#rec').addEventListener('click',()=>rec?stopRec():startRec());
+// Spotify: enlace compartido → nombre de la canción → vista previa de Apple Music
+const SPRE=/https?:\/\/(?:open\.spotify\.com|spotify\.link|spotify\.app\.link)\/[^\s]+/i;
+const esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function openSp(msg){$('#sp').hidden=false;if(msg)$('#spMsg').textContent=msg;$('#sp').scrollIntoView({behavior:'smooth',block:'start'})}
+async function spTitle(url){try{const r=await fetch('https://open.spotify.com/oembed?url='+encodeURIComponent(url));if(!r.ok)return '';const j=await r.json();return j.title||''}catch(e){return ''}}
+async function spSearch(q){
+  $('#spRes').innerHTML='<p class="spmsg">Buscando…</p>';
+  try{const r=await fetch('https://itunes.apple.com/search?entity=song&limit=6&term='+encodeURIComponent(q));const j=await r.json();
+    const it=(j.results||[]).filter(x=>x.previewUrl);
+    if(!it.length){$('#spRes').innerHTML='<p class="spmsg">No encontré esa canción. Prueba escribiendo el nombre y el artista.</p>';return}
+    S.spItems=it;
+    $('#spRes').innerHTML='<p class="spmsg" style="margin:0">Elige la canción correcta:</p>'+it.map((x,i)=>`<button class="spit" data-i="${i}">${x.artworkUrl60?`<img alt="" src="${esc(x.artworkUrl60)}">`:''}<span><b>${esc(x.trackName)}</b><small>${esc(x.artistName)}</small></span></button>`).join('');
+  }catch(e){$('#spRes').innerHTML='<p class="spmsg">No pude buscar la canción (revisa tu conexión). Puedes usar ● Grabar mientras suena.</p>'}
+}
+async function spPick(x){
+  setStatus('Descargando vista previa…');$('#fname').textContent=x.trackName+' — '+x.artistName;
+  try{const r=await fetch(x.previewUrl);if(!r.ok)throw 0;const buf=await decode(await r.arrayBuffer());
+    await useBuffer(buf,x.trackName+' — '+x.artistName+' (30 s)');document.querySelector('.stage').scrollIntoView({behavior:'smooth'})}
+  catch(e){setStatus('No pude descargar la vista previa. Usa ● Grabar mientras suena la canción.',true)}
+}
+async function spHandle(input){
+  input=String(input);const m=input.match(SPRE);
+  if(m){const url=m[0];$('#spOpen').href=url;$('#spOpen').hidden=false;
+    const rest=input.replace(SPRE,'').replace(/[“”"]/g,'').trim();
+    let t=await spTitle(url);if(!t&&rest)t=rest;
+    if(t){$('#spQ').value=t;$('#spMsg').textContent='Canción recibida de Spotify. Si el resultado no es el correcto, agrega el nombre del artista y busca de nuevo.';spSearch(t)}
+    else{$('#spQ').value='';$('#spMsg').textContent='Recibí el enlace, pero no pude leer el nombre de la canción. Escríbelo (canción y artista) y toca Buscar.';$('#spQ').focus()}}
+  else if(input.trim()){$('#spQ').value=input.trim();spSearch(input.trim())}
+}
+$('#spBtn').addEventListener('click',()=>{openSp();$('#spQ').focus()});
+$('#spX').addEventListener('click',()=>{$('#sp').hidden=true});
+$('#spForm').addEventListener('submit',e=>{e.preventDefault();spHandle($('#spQ').value)});
+$('#spRes').addEventListener('click',e=>{const b=e.target.closest('.spit');if(b&&S.spItems)spPick(S.spItems[+b.dataset.i])});
+// Audio compartido desde otra app (Android)
+async function sharedFile(){
+  if(!/[?&]shared=1/.test(location.search)||!('caches' in window))return false;
+  try{history.replaceState(null,'',location.pathname)}catch(e){}
+  try{const c=await caches.open('notas-share'),r=await c.match('./shared-audio');if(!r)throw 0;await c.delete('./shared-audio');
+    const name=decodeURIComponent(r.headers.get('x-name')||'audio compartido');await loadFile(new File([await r.blob()],name));return true}catch(e){}
+  try{const c=await caches.open('notas-share'),r=await c.match('./shared-link');if(!r)return false;await c.delete('./shared-link');
+    const l=await r.json(),all=[l.url,l.text,l.title].filter(Boolean).join(' ');openSp('Recibí algo compartido. Buscando la canción…');await spHandle(all);demo().catch(()=>{});return true}catch(e){return false}
+}
+// App instalable
+if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('sw.js').catch(()=>{});
+const standalone=matchMedia('(display-mode: standalone)').matches||navigator.standalone;
+let dismissed=false;try{dismissed=localStorage.getItem('instX')==='1'}catch(e){}
+let deferred=null;
+if(!standalone&&!dismissed){
+  const ios=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+  if(ios){$('#instTxt').textContent='Para instalarla: toca Compartir y luego “Agregar a inicio”.';$('#inst').hidden=false}
+  else if(/Android/.test(navigator.userAgent)){$('#instTxt').textContent='Para instalarla: menú ⋮ y luego “Instalar app” o “Agregar a pantalla principal”.';$('#inst').hidden=false}
+  addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferred=e;$('#instTxt').textContent='Instala la app para abrirla desde tu pantalla de inicio.';$('#instBtn').hidden=false;$('#inst').hidden=false});
+}
+$('#instBtn').addEventListener('click',async()=>{if(!deferred)return;deferred.prompt();try{await deferred.userChoice}catch(e){}deferred=null;$('#inst').hidden=true});
+$('#instX').addEventListener('click',()=>{$('#inst').hidden=true;try{localStorage.setItem('instX','1')}catch(e){}});
+addEventListener('appinstalled',()=>{$('#inst').hidden=true});
+if(matchMedia('(min-width:980px)').matches)$('#adj').open=true;
+resetInst();render();sharedFile().then(ok=>{if(!ok)demo().catch(()=>setStatus('Sube un audio para empezar'))});
+}
+</script>
+</body></html>
