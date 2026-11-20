@@ -333,7 +333,7 @@ async function play(kind,from=0){
 async function pick(i,scroll){S.sel=i;const n=S.notes[i];render();if(scroll&&S.geo)wrap.scrollLeft=Math.max(0,GUT+n.t*S.geo.sc-wrap.clientWidth/2);
   if(!mode){const a=getAC();try{await a.resume()}catch(e){}tone(n.midi,a.currentTime+.02,Math.min(.8,Math.max(.25,n.d)))}}
 // Carga de audio
-async function useBuffer(buf,name){stop();S.buf=buf;S.name=name;S.dur=buf.duration;resetInst();S.A=null;S.mm=null;S.notes=[];$('#fname').textContent=name;setStatus('Preparando audio…');render();
+async function useBuffer(buf,name){stop();S.buf=buf;S.name=name;S.dur=buf.duration;resetSong();S.A=null;S.mm=null;S.notes=[];$('#fname').textContent=name;setStatus('Preparando audio…');render();
   if(buf.duration>600)setStatus('Audio largo: el análisis puede tardar un poco…');
   const x=await toMono(buf);S.A=await analyze(x);resegment();setStatus(S.notes.length+' notas detectadas');wrap.scrollLeft=0}
 async function loadFile(f){if(!f)return;setStatus('Leyendo '+f.name+'…');
@@ -365,43 +365,52 @@ document.addEventListener('keydown',e=>{if(e.code!=='Space'||/INPUT|BUTTON|SUMMA
 // Instrumental: quitar la voz
 // El trabajo pesado (IA y limpieza) corre en segundo plano, en ai-worker.js y asr-worker.js
 const AI={sr:44100};
-let aiW=null,asrW=null;
-function aiJob(msg,transfer,onMsg){return new Promise((res,rej)=>{
-  if(!aiW)aiW=new Worker('ai-worker.js');S.aiJob={rej};
-  aiW.onmessage=e=>{const d=e.data;if(d.type==='msg'){onMsg&&onMsg(d.text)}else{S.aiJob=null;d.type==='done'?res(d):rej(new Error(d.message))}};
-  aiW.onerror=e=>{S.aiJob=null;rej(new Error(e.message||'falló el proceso en segundo plano'))};
-  aiW.postMessage(msg,transfer)})}
+// Cada sección (Instrumental y Letra) tiene su propio proceso en segundo plano: no se mezclan ni se bloquean entre sí
+const WK={inst:null,lyr:null},JOB={inst:null,lyr:null};let asrW=null;
+function aiJob(lane,msg,transfer,onMsg){return new Promise((res,rej)=>{
+  if(!WK[lane])WK[lane]=new Worker('ai-worker.js');const w=WK[lane];JOB[lane]={rej};
+  w.onmessage=e=>{const d=e.data;if(d.type==='msg'){onMsg&&onMsg(d.text)}else{JOB[lane]=null;d.type==='done'?res(d):rej(new Error(d.message))}};
+  w.onerror=e=>{JOB[lane]=null;rej(new Error(e.message||'falló el proceso en segundo plano'))};
+  w.postMessage(msg,transfer)})}
 function asrJob(x,lang,onMsg){return new Promise((res,rej)=>{
   if(!asrW)asrW=new Worker('asr-worker.js',{type:'module'});S.asrJob={rej};
   asrW.onmessage=e=>{const d=e.data;if(d.type==='msg'){onMsg&&onMsg(d.text)}else{S.asrJob=null;d.type==='done'?res(d):rej(new Error(d.message))}};
   asrW.onerror=e=>{S.asrJob=null;rej(new Error(e.message||'no se pudo iniciar el reconocedor de letra'))};
   asrW.postMessage({x,lang},[x.buffer])})}
-function cancelJobs(){
-  if(aiW){aiW.terminate();aiW=null}if(S.aiJob){S.aiJob.rej(new Error('cancel'));S.aiJob=null}
-  if(asrW){asrW.terminate();asrW=null}if(S.asrJob){S.asrJob.rej(new Error('cancel'));S.asrJob=null}
+function cancelLane(lane){
+  if(WK[lane]){WK[lane].terminate();WK[lane]=null}if(JOB[lane]){JOB[lane].rej(new Error('cancel'));JOB[lane]=null}
+  if(lane==='lyr'){if(asrW){asrW.terminate();asrW=null}if(S.asrJob){S.asrJob.rej(new Error('cancel'));S.asrJob=null}}
 }
-const specJob=(L,R,sr,amount,label,onMsg)=>{const a=L.slice(),b=R.slice();return aiJob({type:'spec',L:a,R:b,sr,amount,label},[a.buffer,b.buffer],onMsg).then(d=>[d.oL,d.oR])};
+// La voz separada con IA se calcula una sola vez por canción y la usan ambas secciones si ya existe
+async function getVocals(lane,msg){
+  const b0=S.buf;if(S.aiVoc&&S.aiFor===b0)return;
+  if(S.vocP&&S.vocFor===b0){S.vocMsg.push(msg);return S.vocP}
+  S.vocFor=b0;S.vocMsg=[msg];
+  const job=(async()=>{let b=b0;
+    if(b.sampleRate!==AI.sr||b.numberOfChannels!==2){const oc=new OfflineAudioContext(2,Math.ceil(b.duration*AI.sr),AI.sr),sr=oc.createBufferSource();sr.buffer=b;sr.connect(oc.destination);sr.start();b=await oc.startRendering()}
+    const L=b.getChannelData(0),R=b.getChannelData(1),a=L.slice(),c=R.slice();
+    const d=await aiJob(lane,{type:'sep',L:a,R:c},[a.buffer,c.buffer],t=>S.vocMsg.forEach(f=>f(t)));
+    if(S.buf!==b0)throw new Error('cancel');S.aiL=L;S.aiR=R;S.aiVoc=[d.vL,d.vR];S.aiFor=b0})();
+  S.vocP=job;try{await job}finally{if(S.vocP===job)S.vocP=null}
+}
+const specJob=(lane,L,R,sr,amount,label,onMsg)=>{const a=L.slice(),b=R.slice();return aiJob(lane,{type:'spec',L:a,R:b,sr,amount,label},[a.buffer,b.buffer],onMsg).then(d=>[d.oL,d.oR])};
 async function buildInstAI(){
-  const b0=S.buf,msg=t=>$('#iMsg').textContent=t;let b=b0;
-  if(b.sampleRate!==AI.sr||b.numberOfChannels!==2){const oc=new OfflineAudioContext(2,Math.ceil(b.duration*AI.sr),AI.sr),s=oc.createBufferSource();s.buffer=b;s.connect(oc.destination);s.start();b=await oc.startRendering()}
-  const L=b.getChannelData(0),R=b.getChannelData(1);S.aiL=L;S.aiR=R;S.guided=false;
-  if(!S.aiVoc||S.aiFor!==b0){
-    const a=L.slice(),c=R.slice(),d=await aiJob({type:'sep',L:a,R:c},[a.buffer,c.buffer],msg);
-    S.aiVoc=[d.vL,d.vR];S.aiFor=b0;
-  }
-  const k=Math.min(1.2,+$('#iAmt').value/85),[vL,vR]=S.aiVoc,iL=new Float32Array(L.length),iR=new Float32Array(L.length);
+  await getVocals('inst',t=>$('#iMsg').textContent=t);
+  const L=S.aiL,R=S.aiR,k=Math.min(1.2,+$('#iAmt').value/85),[vL,vR]=S.aiVoc,iL=new Float32Array(L.length),iR=new Float32Array(L.length);
   for(let i=0;i<L.length;i++){iL[i]=L[i]-k*vL[i];iR[i]=R[i]-k*vR[i]}
-  S.inst=newBuf([iL,iR],AI.sr);S.voz=newBuf([vL,vR],AI.sr);S.instMel=null;
+  S.inst=newBuf([iL,iR],AI.sr);S.voz=newBuf([vL,vR],AI.sr);S.instMel=null;S.guided=false;
 }
-
-function resetInst(){S.inst=null;S.voz=null;S.instMel=null;S.aiVoc=null;S.aiFor=null;S.guided=false;S.lyr=null;if($('#lyrics')){$('#lyrics').innerHTML='';$('#lInst').hidden=true;$('#lMsg').textContent='Separa la voz con IA, escucha la letra y te la muestra con sus tiempos. Después puede usarla para quitar la voz justo donde se canta.'}S.aiCancel=false;$('#iCancel').hidden=true;$('#iCtl').hidden=true;$('#iMake').disabled=!S.buf;$('#iMake').hidden=false;$('#iMel').checked=false;
+function resetInst(){S.inst=null;S.voz=null;S.instMel=null;S.guided=false;$('#iCancel').hidden=true;$('#iCtl').hidden=true;$('#iMake').disabled=!S.buf;$('#iMake').hidden=false;$('#iMel').checked=false;
   $('#iMsg').textContent=S.method==='ai'?'Quita la voz con inteligencia artificial. La primera vez descarga el modelo (67 MB) y después queda guardado. Puede tardar unos minutos en el celular.':'Método rápido: quita lo que suena al centro de la mezcla. Funciona con canciones en estéreo.'}
+function resetLyr(){S.lyr=null;$('#lyrics').innerHTML='';$('#lInst').hidden=true;$('#lCancel').hidden=true;$('#lGo').disabled=!S.buf;
+  $('#lMsg').textContent='Escucha la canción y te muestra la letra con sus tiempos. Si ya creaste el instrumental con IA, usa la voz separada y es más precisa.'}
+function resetSong(){cancelLane('inst');cancelLane('lyr');S.aiVoc=null;S.aiFor=null;S.vocP=null;resetInst();resetLyr()}
 function isMono(buf){if(buf.numberOfChannels<2)return true;const L=buf.getChannelData(0),R=buf.getChannelData(1),st=Math.max(1,Math.floor(L.length/200000));let s=0,m=0;
   for(let i=0;i<L.length;i+=st){const a=L[i],b=R[i];s+=(a-b)*(a-b);m+=(a+b)*(a+b)}return s<m*0.002}
 const newBuf=(chs,sr)=>{const b=getAC().createBuffer(chs.length,chs[0].length,sr);chs.forEach((c,i)=>b.getChannelData(i).set(c));return b};
 async function buildInst(){
   const b=S.buf,L=b.getChannelData(0),R=b.getChannelData(1),amt=+$('#iAmt').value/100;
-  const [oL,oR]=await specJob(L,R,b.sampleRate,amt,'Quitando la voz…',t=>$('#iMsg').textContent=t);
+  const [oL,oR]=await specJob('inst',L,R,b.sampleRate,amt,'Quitando la voz…',t=>$('#iMsg').textContent=t);
   const vL=new Float32Array(L.length),vR=new Float32Array(L.length);for(let i=0;i<L.length;i++){vL[i]=L[i]-oL[i];vR[i]=R[i]-oR[i]}
   S.inst=newBuf([oL,oR],b.sampleRate);S.voz=newBuf([vL,vR],b.sampleRate);S.instMel=null;
 }
@@ -422,7 +431,7 @@ const curInst=()=>$('#iMel').checked&&S.instMel?S.instMel:S.inst;
 async function makeInst(){
   if(!S.buf)return;stop();
   if(S.method!=='ai'&&isMono(S.buf)){$('#iMsg').textContent='Este audio es mono: el método rápido no puede separar la voz. Usa el método IA.';return}
-  $('#iMake').disabled=true;S.aiCancel=false;$('#iCancel').hidden=S.method!=='ai';
+  $('#iMake').disabled=true;$('#iCancel').hidden=S.method!=='ai';
   try{if(S.method==='ai')await buildInstAI();else await buildInst();
     $('#iCtl').hidden=false;$('#iMake').hidden=true;
     $('#iMsg').textContent=S.method==='ai'?'Listo. La IA separó la voz del resto de la música. Si aún se oye algo, sube la intensidad.':'Listo (método rápido). Si se sigue oyendo la voz, prueba el método IA.'}
@@ -442,7 +451,7 @@ async function save(buf,label){
   const u=URL.createObjectURL(f),a=document.createElement('a');a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),5000);
 }
 $('#iMake').addEventListener('click',makeInst);
-$('#iCancel').addEventListener('click',()=>{S.aiCancel=true;cancelJobs();$('#iMsg').textContent='Cancelando…'});
+$('#iCancel').addEventListener('click',()=>{cancelLane('inst');$('#iMsg').textContent='Cancelando…'});
 $('#mAi').addEventListener('click',()=>{if(S.method!=='ai')setMethod('ai')});$('#mFast').addEventListener('click',()=>{if(S.method!=='fast')setMethod('fast')});
 $('#iPlay').addEventListener('click',()=>mode==='inst'?stop():play('inst'));
 $('#iVoz').addEventListener('click',()=>mode==='voz'?stop():play('voz'));
@@ -468,27 +477,25 @@ function hlLyric(){
   S.lyrOn=on;
 }
 async function analyzeLyrics(){
-  if(!S.buf)return;stop();const msg=t=>$('#lMsg').textContent=t;$('#lGo').disabled=true;S.aiCancel=false;$('#lCancel').hidden=false;
+  if(!S.buf)return;const msg=t=>$('#lMsg').textContent=t,b0=S.buf;$('#lGo').disabled=true;$('#lCancel').hidden=false;
   try{
-    if(!S.aiVoc||S.aiFor!==S.buf){msg('Primero separo la voz de la música con IA…');S.method='ai';$('#mAi').classList.add('on');$('#mFast').classList.remove('on');
-      const orig=$('#iMsg');const mo=new MutationObserver(()=>msg(orig.textContent));mo.observe(orig,{childList:true,characterData:true,subtree:true});
-      try{await buildInstAI()}finally{mo.disconnect()}$('#iCtl').hidden=false;$('#iMake').hidden=true;$('#iMsg').textContent='Instrumental con IA listo.'}
-    const [vL,vR]=S.aiVoc,n=vL.length,mono=new Float32Array(n);for(let i=0;i<n;i++)mono[i]=(vL[i]+vR[i])/2;
-    const src=newBuf([mono],AI.sr),oc=new OfflineAudioContext(1,Math.ceil(src.duration*16000),16000),s=oc.createBufferSource();s.buffer=src;s.connect(oc.destination);s.start();
+    const useVoc=S.aiVoc&&S.aiFor===b0;let src;
+    if(useVoc){const [vL,vR]=S.aiVoc,n=vL.length,mono=new Float32Array(n);for(let i=0;i<n;i++)mono[i]=(vL[i]+vR[i])/2;src=newBuf([mono],AI.sr)}else src=b0;
+    msg(useVoc?'Usando la voz separada con IA…':'Preparando el audio…');
+    const oc=new OfflineAudioContext(1,Math.ceil(src.duration*16000),16000),s=oc.createBufferSource();s.buffer=src;s.connect(oc.destination);s.start();
     const x=(await oc.startRendering()).getChannelData(0);
-    const lang=$('#lLang').value,out=await asrJob(x.slice(),lang,msg),dur=src.duration;
+    const lang=$('#lLang').value,out=await asrJob(x.slice(),lang,msg),dur=src.duration;if(S.buf!==b0)return;
     S.lyr=(out.chunks||[]).map(c=>{const a=c.timestamp[0]??0,b=c.timestamp[1]??Math.min(dur,a+4);return {s:a,e:Math.max(b,a+.3),t:(c.text||'').trim()}}).filter(c=>c.t&&!HALLU.test(c.t)&&!/^[\[(♪].*[\])♪]$/.test(c.t));
     renderLyrics();$('#lInst').hidden=!S.lyr.length;
-    msg(S.lyr.length?`Encontré ${S.lyr.length} frases cantadas. Toca una para escucharla, o crea el instrumental guiado por la letra.`:'No encontré letra cantada en esta canción.');
+    msg(S.lyr.length?`Encontré ${S.lyr.length} frases cantadas. Toca una para escucharla.`+(useVoc?'':' Si la letra sale con errores, crea primero el instrumental con IA y vuelve a analizar.'):'No encontré letra cantada en esta canción.');
   }catch(e){msg(e.message==='cancel'?'Cancelado.':'No pude analizar la letra ('+(e.message||'error')+'). Revisa tu conexión e intenta de nuevo.')}
   $('#lGo').disabled=false;$('#lCancel').hidden=true;
 }
-// Instrumental guiado: donde se canta, limpieza fuerte (IA + segunda pasada); donde no, el instrumental normal de la IA
 async function buildGuided(){
-  const msg=t=>{$('#lMsg').textContent=t;$('#iMsg').textContent=t},L=S.aiL,R=S.aiR,[vL,vR]=S.aiVoc,n=L.length,sr=AI.sr;
+  const msg=t=>$('#lMsg').textContent=t;await getVocals('lyr',msg);const L=S.aiL,R=S.aiR,[vL,vR]=S.aiVoc,n=L.length,sr=AI.sr;
   const k=Math.min(1.2,+$('#iAmt').value/85),sL=new Float32Array(n),sR=new Float32Array(n);
   for(let i=0;i<n;i++){sL[i]=L[i]-vL[i]*Math.max(1.1,k);sR[i]=R[i]-vR[i]*Math.max(1.1,k)}
-  const [cL,cR]=await specJob(sL,sR,sr,1,'Limpiando los restos de voz en las partes cantadas…',msg);
+  const [cL,cR]=await specJob('lyr',sL,sR,sr,1,'Limpiando los restos de voz en las partes cantadas…',msg);
   const g=new Float32Array(n),f=1/Math.round(.12*sr);
   for(const l of S.lyr){const a=Math.max(0,Math.floor((l.s-.3)*sr)),b=Math.min(n,Math.ceil((l.e+.8)*sr));for(let i=a;i<b;i++)g[i]=1}
   for(let i=1;i<n;i++)g[i]=Math.max(g[i],g[i-1]-f);for(let i=n-2;i>=0;i--)g[i]=Math.max(g[i],g[i+1]-f);
@@ -497,15 +504,15 @@ async function buildGuided(){
   S.inst=newBuf([oL,oR],sr);S.instMel=null;S.guided=true;
 }
 async function makeGuided(){
-  if(!S.lyr||!S.aiVoc)return;stop();$('#lInst').disabled=true;
-  try{await buildGuided();$('#iCtl').hidden=false;$('#iMake').hidden=true;
+  if(!S.lyr)return;const b0=S.buf;$('#lInst').disabled=true;$('#lCancel').hidden=false;
+  try{await buildGuided();if(S.buf!==b0)return;$('#iCtl').hidden=false;$('#iMake').hidden=true;
     $('#iMsg').textContent='Instrumental guiado por la letra: en las partes cantadas se limpió dos veces; en el resto queda la música de la IA.';
-    $('#lMsg').textContent='Listo. Escúchalo o guárdalo en la sección Instrumental.';play('inst');document.querySelector('.inst').scrollIntoView({behavior:'smooth'})}
-  catch(e){$('#lMsg').textContent='No pude crear el instrumental guiado.'}
-  $('#lInst').disabled=false;
+    $('#lMsg').textContent='Listo. Escúchalo o guárdalo en la sección Instrumental.'}
+  catch(e){$('#lMsg').textContent=e.message==='cancel'?'Cancelado.':'No pude crear el instrumental guiado ('+(e.message||'error')+').'}
+  $('#lInst').disabled=false;$('#lCancel').hidden=true;
 }
 $('#lGo').addEventListener('click',analyzeLyrics);
-$('#lCancel').addEventListener('click',()=>{S.aiCancel=true;cancelJobs();$('#lMsg').textContent='Cancelando…'});
+$('#lCancel').addEventListener('click',()=>{cancelLane('lyr');$('#lMsg').textContent='Cancelando…'});
 $('#lInst').addEventListener('click',makeGuided);
 $('#lyrics').addEventListener('click',e=>{const b=e.target.closest('.lline');if(b)play(S.inst?'inst':'orig',S.lyr[+b.dataset.i].s)});
 $('#lCopy').addEventListener('click',async()=>{const t=(S.lyr||[]).map(l=>l.t).join('\n');try{await navigator.clipboard.writeText(t);$('#lCopy').textContent='Copiada'}catch(e){$('#lCopy').textContent='No se pudo copiar'}setTimeout(()=>$('#lCopy').textContent='Copiar letra',1600)});
@@ -642,7 +649,7 @@ $('#instBtn').addEventListener('click',async()=>{if(!deferred)return;deferred.pr
 $('#instX').addEventListener('click',()=>{$('#inst').hidden=true;try{localStorage.setItem('instX','1')}catch(e){}});
 addEventListener('appinstalled',()=>{$('#inst').hidden=true});
 if(matchMedia('(min-width:980px)').matches)$('#adj').open=true;
-resetInst();render();sharedFile().then(ok=>{if(!ok)demo().catch(()=>setStatus('Sube un audio para empezar'))});
+resetSong();render();sharedFile().then(ok=>{if(!ok)demo().catch(()=>setStatus('Sube un audio para empezar'))});
 }
 </script>
 </body></html>
