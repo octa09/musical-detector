@@ -213,6 +213,7 @@ body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bot
       <div class="stat"><small>Rango</small><b id="sR">—</b></div>
       <div class="stat"><small>Tonalidad probable</small><b id="sK">—</b></div>
       <div class="stat"><small>Duración del audio</small><b id="sD">—</b></div>
+      <div class="stat"><small>Afinación (La)</small><b id="sT">—</b></div>
     </div>
     <details id="adj">
       <summary>Ajustes de detección</summary>
@@ -232,7 +233,7 @@ const MAJ=[6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88],MIN=[6.3
 let notation='es';
 const pcName=p=>(notation==='es'?ES:EN)[(p%12+12)%12];
 const nm=m=>pcName(m)+(Math.floor(m/12)-1);
-const SR=11025,W=512,HOP=192,TMIN=Math.floor(SR/1400),TMAX=Math.ceil(SR/62);
+const SR=16000;
 let ac=null;const getAC=()=>{if(!ac)ac=new (window.AudioContext||window.webkitAudioContext)();return ac};
 const S={method:'ai',buf:null,A:null,notes:[],mm:null,dur:0,sel:-1,geo:null};
 const statusEl=$('#status');
@@ -246,42 +247,45 @@ async function toMono(buf){
     for(let i=0;i<len;i++){const a=Math.floor(i*ratio),b=Math.max(a+1,Math.floor((i+1)*ratio));let s=0;for(let c=0;c<ch;c++)for(let j=a;j<b;j++)s+=data[c][j]||0;out[i]=s/(ch*(b-a))}
     return out}
 }
-// YIN: frecuencia fundamental por cuadro
-async function analyze(x){
-  const n=Math.max(0,Math.floor((x.length-W-TMAX)/HOP)),f0=new Float32Array(n),rms=new Float32Array(n),d=new Float32Array(TMAX+1);
+// Análisis de tono en segundo plano (ai-worker.js): saliencia armónica + Viterbi
+let pitchQ=Promise.resolve();
+function analyze(x){const run=()=>{const c=x.slice();return aiJob('pitch',{type:'pitch',x:c},[c.buffer],t=>setStatus(t))};const p=pitchQ.then(run,run);pitchQ=p.catch(()=>{});return p}
+// ---- Segmentación en notas: afinación de la canción, histéresis de tono y ataques ----
+function segment2(A,sens,minDur){
+  const {f0,sal,rms,flux,hop,off}=A,rs=A.rs||A.rms,n=f0.length,pct=(arr,p)=>{const s=Array.from(arr).filter(v=>v>0).sort((a,b)=>a-b);return s.length?s[Math.floor((s.length-1)*p)]:0};
+  const rmx=pct(rms,.98),smx=pct(sal,.95),gate=rmx*(0.02+0.2*(1-sens)),sth=smx*(0.04+0.16*(1-sens));
+  const m=new Float32Array(n).fill(NaN);
+  for(let i=0;i<n;i++)if(f0[i]>0&&rms[i]>gate&&sal[i]>sth)m[i]=69+12*Math.log2(f0[i]/440);
+  // afinación global de la canción (por si no está en La 440)
+  let sx=0,sy=0;for(let i=0;i<n;i++)if(m[i]===m[i]){const a=2*Math.PI*(m[i]-Math.round(m[i])),w=rms[i];sx+=w*Math.cos(a);sy+=w*Math.sin(a)}
+  const tun=(sx||sy)?Math.atan2(sy,sx)/(2*Math.PI):0;
+  const mt=new Float32Array(n).fill(NaN);
+  for(let i=0;i<n;i++){if(m[i]!==m[i])continue;const w=[];for(let k=-2;k<=2;k++){const j=i+k;if(j>=0&&j<n&&m[j]===m[j])w.push(m[j]-tun)}w.sort((a,b)=>a-b);mt[i]=w[w.length>>1]}
+  // ataques: picos del flujo espectral y caídas de volumen dentro de una nota ligada
+  const on=new Uint8Array(n);let fm=0;for(const v of flux)fm=Math.max(fm,v);
+  for(let i=1;i<n-1;i++){let lo=0,c=0;for(let k=-8;k<=8;k++){const j=i+k;if(j>=0&&j<n){lo+=flux[j];c++}}lo/=c;
+    let pk=true;for(let k=-3;k<=3;k++){const j=i+k;if(j>=0&&j<n&&flux[j]>flux[i])pk=false}
+    if(pk&&flux[i]>lo*1.6+fm*0.06)on[i]=1}
+  for(let i=6;i<n-6;i++){let isMin=true;for(let k=-3;k<=3;k++)if(rs[i+k]<rs[i])isMin=false;if(!isMin||rs[i]<gate*0.5&&rms[i]<gate)continue;
+    let a=0,b=0;for(let k=1;k<=12;k++){if(i-k>=0)a=Math.max(a,rs[i-k]);if(i+k<n)b=Math.max(b,rs[i+k])}
+    if(rs[i]<0.66*Math.min(a,b))on[Math.min(n-1,i+1)]=1}
+  const minF=Math.max(2,Math.round(minDur/hop)),med=a=>{const s=a.slice().sort((x,y)=>x-y);return s[s.length>>1]};
+  const raw=[];let cur=null,dev=0;
+  const close=end=>{if(cur&&cur.v.length>=minF)raw.push({start:cur.start,len:end-cur.start,p:med(cur.v),on:cur.on});cur=null;dev=0};
   for(let i=0;i<n;i++){
-    const o=i*HOP;let e=0;for(let j=0;j<W;j++){const v=x[o+j];e+=v*v}rms[i]=Math.sqrt(e/W);
-    let run=0;d[0]=1;
-    for(let t=1;t<=TMAX;t++){let s=0;for(let j=0;j<W;j++){const df=x[o+j]-x[o+j+t];s+=df*df}run+=s;d[t]=run?s*t/run:1}
-    let tau=-1,best=1,bestT=-1;
-    for(let t=TMIN;t<=TMAX;t++){if(d[t]<0.15){while(t<TMAX&&d[t+1]<d[t])t++;tau=t;break}if(d[t]<best){best=d[t];bestT=t}}
-    if(tau<0&&best<0.3)tau=bestT;
-    if(tau>0){const a=d[tau-1],b=d[tau],c=tau<TMAX?d[tau+1]:b,den=a-2*b+c,sh=den?0.5*(a-c)/den:0;f0[i]=SR/(tau+sh)}
-    if(i%300===0){setStatus('Analizando… '+Math.round(i/n*100)+'%');await new Promise(r=>setTimeout(r))}
+    const v=mt[i];if(v!==v){close(i);continue}
+    if(!cur){cur={start:i,v:[v],on:!!on[i]||(i>0&&!!on[i-1])};continue}
+    if(on[i]&&cur.v.length>=minF){close(i);cur={start:i,v:[v],on:true};continue}
+    const ref=med(cur.v.slice(-15));
+    if(Math.abs(v-ref)>0.55){dev++;if(dev>=3){const s=i-dev+1;cur.v.length=Math.max(0,cur.v.length-(dev-1));close(s);cur={start:s,v:[],on:false};for(let k=s;k<=i;k++)cur.v.push(mt[k])}else cur.v.push(v)}
+    else{dev=0;cur.v.push(v)}
   }
-  return {f0,rms,hop:HOP/SR,off:W/2/SR};
-}
-function segment(A,sens,minDur){
-  const {f0,rms,hop,off}=A,n=f0.length;let mx=0;for(const v of rms)if(v>mx)mx=v;
-  const gate=mx*(0.015+0.22*(1-sens)),m=new Float32Array(n).fill(NaN),r=new Array(n).fill(null);
-  for(let i=0;i<n;i++)if(f0[i]>0&&rms[i]>gate)m[i]=69+12*Math.log2(f0[i]/440);
-  for(let i=0;i<n;i++){if(m[i]!==m[i])continue;const w=[];for(let k=-2;k<=2;k++){const j=i+k;if(j<0||j>=n)continue;if(m[j]===m[j])w.push(m[j])}
-    if(w.length>=3){w.sort((a,b)=>a-b);r[i]=Math.round(w[w.length>>1])}}
-  const minF=Math.max(1,Math.round(minDur/hop)),raw=[];let cur=null;
-  const rise=i=>{if(i<4||i>=n)return false;let lo=Infinity;for(let k=1;k<=4;k++)lo=Math.min(lo,rms[i-k]);return rms[i]>lo*1.8};
-  for(let i=0;i<=n;i++){
-    const v=i<n?r[i]:null;let onset=false;
-    if(cur&&v!==null&&cur.len>minF)onset=rise(i);
-    if(cur&&(v!==cur.midi||onset)){if(cur.len>=minF)raw.push(cur);cur=null}
-    if(v!==null&&!cur)cur={midi:v,start:i,len:0,c:0,on:onset||rise(i)||rise(i-1)||rise(i-2)};
-    if(cur){cur.len++;cur.c+=m[i]-v}
-  }
+  close(n);
   const out=[];
-  for(const b of raw){const a=out[out.length-1];
-    const g0=a?a.start+a.len:0;let quiet=false;if(a)for(let j=g0;j<b.start;j++)if(rms[j]<=gate*1.3){quiet=true;break}
-    if(a&&a.midi===b.midi&&!b.on&&!quiet&&b.start-g0<=minF){a.c+=b.c;a.len=b.start+b.len-a.start}else out.push(b)}
-  S.mm=m;
-  return out.map(b=>({midi:b.midi,t:b.start*hop+off,d:b.len*hop,cents:Math.round(b.c/b.len*100)}));
+  for(const b of raw){const r=Math.round(b.p),a=out[out.length-1];
+    if(a&&a.midi===r&&!b.on&&b.start-(a.start+a.len)<=2){a.len=b.start+b.len-a.start;continue}
+    out.push({midi:r,start:b.start,len:b.len,cents:Math.round((b.p-r)*100),on:b.on})}
+  return {notes:out.map(b=>({midi:b.midi,t:b.start*hop+off,d:b.len*hop,cents:b.cents})),mt,tun};
 }
 function keyOf(N){
   if(N.length<4)return '—';const w=new Array(12).fill(0);for(const n of N)w[n.midi%12]+=n.d;
@@ -290,13 +294,13 @@ function keyOf(N){
   let best=-2,k='—';for(let s=0;s<12;s++){const c1=corr(MAJ,s),c2=corr(MIN,s);if(c1>best){best=c1;k=pcName(s)+' mayor'}if(c2>best){best=c2;k=pcName(s)+' menor'}}
   return k;
 }
-function resegment(){if(!S.A)return;S.notes=segment(S.A,+$('#sens').value/100,+$('#minD').value/1000);S.sel=-1;render()}
+function resegment(){if(!S.A)return;const r=segment2(S.A,+$('#sens').value/100,+$('#minD').value/1000);S.notes=r.notes;S.mm=r.mt;S.tun=r.tun;S.sel=-1;render()}
 function render(){
   const N=S.notes;
   $('#seq').textContent=S.A?(N.length?N.map(n=>nm(n.midi)).join(' '):'No encontré notas claras. Prueba subir la sensibilidad.'):'—';
   $('#sN').textContent=N.length;
   if(N.length){const ms=N.map(n=>n.midi);$('#sR').textContent=nm(Math.min(...ms))+' – '+nm(Math.max(...ms))}else $('#sR').textContent='—';
-  $('#sK').textContent=keyOf(N);$('#sD').textContent=S.buf?S.dur.toFixed(1)+' s':'—';
+  $('#sK').textContent=keyOf(N);$('#sT').textContent=S.A&&N.length?(440*2**((S.tun||0)/12)).toFixed(1)+' Hz':'—';$('#sD').textContent=S.buf?S.dur.toFixed(1)+' s':'—';
   $('#chips').innerHTML=N.map((n,i)=>`<button class="chip${i===S.sel?' on':''}" data-i="${i}" title="Afinación ${n.cents>0?'+':''}${n.cents} cents"><b>${nm(n.midi)}</b><span>${n.t.toFixed(2)} s · ${Math.round(n.d*1000)} ms</span></button>`).join('');
   ['#pOrig','#pNotes'].forEach(s=>$(s).disabled=!S.buf);
   draw();
@@ -436,7 +440,7 @@ async function buildInst(){
 }
 // Melodía de la voz tocada por un instrumento, mezclada con el instrumental
 async function buildMel(){
-  const A=await analyze(await toMono(S.voz)),notes=segment(A,+$('#sens').value/100,+$('#minD').value/1000),b=S.inst,sr=b.sampleRate;
+  const A=await analyze(await toMono(S.voz)),notes=segment2(A,+$('#sens').value/100,+$('#minD').value/1000).notes,b=S.inst,sr=b.sampleRate;
   const oc=new OfflineAudioContext(2,b.length,sr),src=oc.createBufferSource();src.buffer=b;src.connect(oc.destination);src.start();
   let pk=0;for(let c=0;c<2;c++){const d=b.getChannelData(c);for(let i=0;i<d.length;i+=64)pk=Math.max(pk,Math.abs(d[i]))}
   const vol=Math.min(.35,Math.max(.12,pk*.45)),bus=oc.createGain();bus.gain.value=vol;bus.connect(oc.destination);

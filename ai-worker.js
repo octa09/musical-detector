@@ -97,6 +97,53 @@ async function mdxVocals(L,R,run,msg){
   return [vL.subarray(0,n),vR.subarray(0,n)];
 }
 
+// ---- Seguimiento de tono por "saliencia armónica" + Viterbi (funciona con voz sola y con acompañamiento) ----
+const PT={sr:16000,N:1024,hop:128,NF:4096,fmin:55,bins:600,cb:10};
+function pitchTrack(x,onProg){
+  const {sr,N,hop,NF,fmin,bins,cb}=PT,fft=makeFFT(NF),kmax=Math.floor(5000/sr*NF),n=Math.max(0,Math.floor((x.length-N)/hop)+1);
+  const win=new Float64Array(N);for(let i=0;i<N;i++)win[i]=0.5-0.5*Math.cos(2*Math.PI*i/N);
+  const re=new Float64Array(NF),im=new Float64Array(NF),lm=new Float64Array(kmax+1),plm=new Float64Array(kmax+1),sal=new Float64Array(bins);
+  const rms=new Float32Array(n),rs=new Float32Array(n),flux=new Float32Array(n),cands=new Array(n);
+  const hw=[];for(let h=1;h<=10;h++)hw.push(Math.pow(0.8,h-1));
+  for(let i=0;i<n;i++){
+    const o=i*hop;let e=0;re.fill(0);im.fill(0);
+    for(let j=0;j<N;j++){const v=x[o+j];e+=v*v;re[j]=v*win[j]}rms[i]=Math.sqrt(e/N);
+    let es=0;for(let j=N/2-128;j<N/2+128;j++)es+=x[o+j]*x[o+j];rs[i]=Math.sqrt(es/256);
+    fft(re,im,false);let mx=0;
+    for(let k=0;k<=kmax;k++){const m=Math.hypot(re[k],im[k]);lm[k]=m;if(m>mx)mx=m}
+    // flujo espectral (para detectar ataques de notas)
+    let fl=0;for(let k=2;k<=kmax;k++){const a=Math.log(1+100*lm[k]),d=a-plm[k];if(d>0)fl+=d;plm[k]=a}flux[i]=fl;
+    cands[i]=[];if(mx<1e-6)continue;
+    // picos del espectro, con frecuencia interpolada
+    const pk=[];
+    for(let k=2;k<kmax;k++){const b=lm[k];if(b>lm[k-1]&&b>=lm[k+1]&&b>mx*0.01){const a=Math.log(lm[k-1]+1e-12),bb=Math.log(b),c=Math.log(lm[k+1]+1e-12),den=a-2*bb+c,p=den?0.5*(a-c)/den:0;
+      pk.push([(k+p)*sr/NF,Math.exp(bb-0.25*(a-c)*p)])}}
+    pk.sort((a,b)=>b[1]-a[1]);if(pk.length>40)pk.length=40;
+    // saliencia: cada pico suma a las fundamentales de las que podría ser armónico
+    sal.fill(0);
+    for(const [f,a] of pk)for(let h=1;h<=10;h++){const f0=f/h;if(f0<fmin)break;const b=1200*Math.log2(f0/fmin)/cb;if(b>=bins+10)continue;
+      const c=Math.round(b);for(let q=c-10;q<=c+10;q++){if(q<0||q>=bins)continue;const d=Math.abs(q-b);if(d>=10)continue;const w=Math.cos(Math.PI/2*d/10);sal[q]+=w*w*hw[h-1]*a}}
+    let smx=0;for(let q=0;q<bins;q++)if(sal[q]>smx)smx=sal[q];
+    const cs=[];for(let q=1;q<bins-1;q++)if(sal[q]>sal[q-1]&&sal[q]>=sal[q+1]&&sal[q]>smx*0.25){const a=sal[q-1],b=sal[q],c=sal[q+1],den=a-2*b+c,p=den?0.5*(a-c)/den:0;cs.push([fmin*2**((q+p)*cb/1200),b])}
+    cs.sort((a,b)=>b[1]-a[1]);if(cs.length>5)cs.length=5;cands[i]=cs;
+    if(onProg&&i%400===0)onProg(i/n);
+  }
+  // Viterbi: elige la línea de tono más continua y fuerte (evita saltos de octava falsos)
+  const f0=new Float32Array(n),sl=new Float32Array(n);let i=0;
+  while(i<n){if(!cands[i].length){i++;continue}let j=i;while(j<n&&cands[j].length)j++;
+    const cost=[],back=[];
+    for(let t=i;t<j;t++){const cs=cands[t],mx=cs[0][1],cc=new Float64Array(cs.length),bk=new Int16Array(cs.length);
+      for(let a=0;a<cs.length;a++){const ob=-Math.log(cs[a][1]/mx+1e-3);
+        if(t===i){cc[a]=ob;continue}const pc=cands[t-1],pcost=cost[t-1-i];let best=Infinity,bi=0;
+        for(let b=0;b<pc.length;b++){const st=Math.abs(12*Math.log2(cs[a][0]/pc[b][0])),v=pcost[b]+0.35*Math.min(st,8);if(v<best){best=v;bi=b}}
+        cc[a]=best+ob;bk[a]=bi}
+      cost.push(cc);back.push(bk)}
+    let a=0,last=cost[cost.length-1];for(let q=1;q<last.length;q++)if(last[q]<last[a])a=q;
+    for(let t=j-1;t>=i;t--){f0[t]=cands[t][a][0];sl[t]=cands[t][a][1];a=back[t-i][a]}
+    i=j}
+  return {f0,sal:sl,rms,rs,flux,hop:hop/sr,off:N/2/sr};
+}
+
 const ORT='https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
 const MODEL_URLS=['https://huggingface.co/huangjackson/Kim_Vocal_2/resolve/main/Kim_Vocal_2.onnx','https://huggingface.co/memoavatar/memo/resolve/main/misc/vocal_separator/Kim_Vocal_2.onnx'];
 let sess=null,gpu=false;
@@ -138,6 +185,9 @@ onmessage=async e=>{
       const [vL,vR]=await mdxVocals(d.L,d.R,run,(c,n)=>{const el=(Date.now()-t0)/1000,eta=c?Math.round(el/c*(n-c)):null;
         say(`Quitando la voz con IA… parte ${c+1} de ${n}`+(eta!=null?` · faltan ~${eta>90?Math.round(eta/60)+' min':eta+' s'}`:' · calculando tiempo…'))});
       const a=vL.slice(),b=vR.slice();postMessage({type:'done',vL:a,vR:b},[a.buffer,b.buffer]);
+    }else if(d.type==='pitch'){
+      const r=pitchTrack(d.x,p=>say('Analizando notas… '+Math.round(p*100)+'%'));
+      postMessage({type:'done',...r},[r.f0.buffer,r.sal.buffer,r.rms.buffer,r.rs.buffer,r.flux.buffer]);
     }else if(d.type==='spec'){
       const [oL,oR]=await separateSpec(d.L,d.R,d.sr,d.amount,p=>say((d.label||'Quitando la voz…')+' '+Math.round(p*100)+'%'));
       postMessage({type:'done',oL,oR},[oL.buffer,oR.buffer]);
