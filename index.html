@@ -91,6 +91,10 @@ input[type=range]{width:100%;accent-color:var(--acc);height:32px}
 .spform{display:flex;gap:10px;flex-wrap:wrap}
 .spform input{flex:1 1 220px;font:16px Inter,sans-serif;min-height:44px;padding:0 14px;border-radius:12px;border:1.5px solid var(--line);background:var(--bg);color:var(--ink)}
 #spLink:empty{display:none}.lcard{border:1.5px solid var(--line);border-radius:14px;padding:12px;margin-top:12px;background:var(--bg)}
+.lhead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:10px}.lhead b{font-family:Outfit,sans-serif;font-size:20px}.lhead span{color:var(--mut)}
+.lsrc{font-size:14px;color:var(--acc);text-decoration:none;white-space:nowrap}
+.lrec{width:100%;min-height:52px;font-size:17px;margin:12px 0 6px}.lrec.on{background:#d6283b;border-color:#d6283b}
+#spResBox{margin-top:12px}#spResBox summary{min-height:44px;display:flex;align-items:center;font-weight:600;cursor:pointer;color:var(--mut)}#spResBox.plain summary{display:none}
 .lcard iframe{width:100%;border:0;border-radius:10px;display:block}.vid{position:relative;aspect-ratio:16/9}.vid iframe{position:absolute;inset:0;height:100%}
 #spRes{display:grid;gap:8px;margin-top:12px}#spList{display:grid;grid-auto-rows:max-content;gap:8px;max-height:min(60vh,560px);overflow-y:auto;overscroll-behavior:contain}
 @media(min-width:760px){#spList{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -157,7 +161,7 @@ body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bot
     <p id="spMsg" class="spmsg">Escribe el nombre de la canción, o pega un enlace de YouTube, Spotify, Audiomack, SoundCloud o Apple Music.</p>
     <form id="spForm" class="spform"><input id="spQ" type="search" placeholder="Nombre de la canción o enlace" autocomplete="off" enterkeyhint="search"><label class="spsel">Buscar en <select id="spMode"><option value="all">Todo</option><option value="song">Nombre de la canción</option><option value="artist">Artista</option></select></label><button class="btn pri">Buscar</button></form>
     <div id="spLink"></div>
-    <div id="spRes"></div>
+    <details id="spResBox" class="plain" open><summary>¿Prefieres una vista previa de 30 s del catálogo?</summary><div id="spRes"></div></details>
     <p class="note">Las canciones del catálogo son vistas previas de 30 segundos (lo que las tiendas permiten usar en otras apps). Para la canción completa, súbela, compártela a la app o usa ● Grabar mientras suena.</p>
   </div>
 </section>
@@ -619,33 +623,70 @@ $('#lRes').addEventListener('click',e=>{const b=e.target.closest('.spit');if(b)u
 $('#lOther').addEventListener('click',()=>{$('#lMsg').textContent='Elige la letra correcta:';showLrList()});
 $('#lSync').addEventListener('click',syncLyrics);
 $('#lCopy').addEventListener('click',async()=>{const t=(S.lyrView||[]).map(l=>l.t).join('\n');try{await navigator.clipboard.writeText(t);$('#lCopy').textContent='Copiada'}catch(e){$('#lCopy').textContent='No se pudo copiar'}setTimeout(()=>$('#lCopy').textContent='Copiar letra',1600)});
-// Grabación con micrófono
-let rec=null;
+// Grabación sin compresión (AudioWorklet). En computador puede grabar directo el audio de esta pestaña.
+let rec=null,recMod=null;
+const RECW="class R extends AudioWorkletProcessor{process(i){const c=i[0];if(c&&c.length)this.port.postMessage([c[0].slice(),(c[1]||c[0]).slice()]);return true}}registerProcessor('notas-rec',R)";
+const canTab=()=>!!(navigator.mediaDevices&&navigator.mediaDevices.getDisplayMedia)&&!/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)&&matchMedia('(pointer:fine)').matches;
+const fmtRec=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
 function yinLive(b,sr){const N=1024,tMin=Math.floor(sr/1400),tMax=Math.min(Math.ceil(sr/62),b.length-N-1);let e=0;for(let j=0;j<N;j++)e+=b[j]*b[j];if(Math.sqrt(e/N)<0.008)return 0;
   const d=new Float32Array(tMax+1);let run=0;d[0]=1;for(let t=1;t<=tMax;t++){let s=0;for(let j=0;j<N;j++){const df=b[j]-b[j+t];s+=df*df}run+=s;d[t]=run?s*t/run:1}
   for(let t=tMin;t<=tMax;t++)if(d[t]<0.15){while(t<tMax&&d[t+1]<d[t])t++;const a=d[t-1],c=d[t+1]??d[t],den=a-2*d[t]+c;return sr/(t+(den?0.5*(a-c)/den:0))}return 0}
-async function startRec(){
+async function startRec(o={}){
   stop();const a=getAC();try{await a.resume()}catch(e){}
-  if(!navigator.mediaDevices||!window.MediaRecorder){setStatus('Este navegador no permite grabar. Usa “Subir audio”.',true);return}
-  let stream;try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}})}
-  catch(e){setStatus('No pude usar el micrófono. Revisa el permiso en los ajustes del teléfono.',true);return}
-  const an=a.createAnalyser();an.fftSize=4096;const msrc=a.createMediaStreamSource(stream);msrc.connect(an);
-  const mr=new MediaRecorder(stream),chunks=[];mr.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
-  mr.onstop=async()=>{stream.getTracks().forEach(t=>t.stop());msrc.disconnect();$('#live').hidden=true;
-    const blob=new Blob(chunks,{type:mr.mimeType||'audio/webm'});
-    try{await useBuffer(await decode(await blob.arrayBuffer()),'Grabación '+new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'}))}
-    catch(e){setStatus('No pude leer la grabación. Intenta de nuevo.',true)}};
-  mr.start(250);const b=new Float32Array(an.fftSize),st=performance.now();let last=0;
-  $('#live').hidden=false;$('#rec').classList.add('on');$('#rec').textContent='■ Detener';setStatus('Grabando…');
-  const loop=t=>{if(t-last>45){last=t;an.getFloatTimeDomainData(b);const f=yinLive(b,a.sampleRate);
-      if(f){const m=69+12*Math.log2(f/440),r=Math.round(m),c=Math.round((m-r)*100);$('#liveN').textContent=nm(r);$('#liveF').textContent=`${f.toFixed(1)} Hz · ${c>0?'+':''}${c} cents`}
+  if(!navigator.mediaDevices){setStatus('Este navegador no permite grabar. Usa “Subir audio”.',true);return false}
+  const useTab=!!o.tab&&canTab();let stream;
+  try{
+    if(useTab){stream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,suppressLocalAudioPlayback:false},preferCurrentTab:true,selfBrowserSurface:'include',systemAudio:'include'});
+      if(!stream.getAudioTracks().length){stream.getTracks().forEach(t=>t.stop());throw new Error('noaudio')}}
+    else stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,channelCount:{ideal:2},sampleRate:{ideal:48000}}});
+  }catch(e){setStatus(e.message==='noaudio'?'No se compartió el audio: elige esta pestaña y activa “Compartir audio de la pestaña”.':useTab?'No se pudo grabar el audio de la pestaña.':'No pude usar el micrófono. Revisa el permiso en los ajustes del teléfono.',true);return false}
+  const src=a.createMediaStreamSource(stream),an=a.createAnalyser();an.fftSize=4096;src.connect(an);
+  const r={stream,src,an,L:[],R:[],node:null,mr:null,chunks:[],tab:useTab,sr:a.sampleRate,st:performance.now(),name:o.name||'Grabación',onStop:o.onStop,fromLink:!!o.fromLink,raf:0};
+  try{if(!a.audioWorklet)throw 0;if(recMod!==a){await a.audioWorklet.addModule(URL.createObjectURL(new Blob([RECW],{type:'text/javascript'})));recMod=a}
+    r.node=new AudioWorkletNode(a,'notas-rec',{numberOfInputs:1,numberOfOutputs:1,channelCount:2,channelCountMode:'explicit'});
+    r.node.port.onmessage=e=>{r.L.push(e.data[0]);r.R.push(e.data[1])};r.z=a.createGain();r.z.gain.value=0;src.connect(r.node);r.node.connect(r.z);r.z.connect(a.destination)}
+  catch(e){r.node=null;if(!window.MediaRecorder){stream.getTracks().forEach(t=>t.stop());setStatus('Este navegador no permite grabar. Usa “Subir audio”.',true);return false}
+    r.mr=new MediaRecorder(stream,{audioBitsPerSecond:256000});r.mr.ondataavailable=e=>{if(e.data.size)r.chunks.push(e.data)};r.mr.start(250)}
+  stream.getTracks().forEach(t=>t.addEventListener('ended',()=>{if(rec===r)stopRec()}));
+  rec=r;$('#live').hidden=false;$('#rec').classList.add('on');$('#rec').textContent='■ Detener';setStatus(useTab?'Grabando el audio de esta pestaña…':'Grabando…');
+  const b=new Float32Array(an.fftSize);let last=0;
+  const loop=t=>{if(rec!==r)return;if(t-last>45){last=t;an.getFloatTimeDomainData(b);const f=yinLive(b,a.sampleRate);
+      if(f){const m=69+12*Math.log2(f/440),q=Math.round(m),c=Math.round((m-q)*100);$('#liveN').textContent=nm(q);$('#liveF').textContent=`${f.toFixed(1)} Hz · ${c>0?'+':''}${c} cents`}
       else{$('#liveN').textContent='…';$('#liveF').textContent=''}
-      const sec=Math.floor((performance.now()-st)/1000);$('#liveT').textContent=`Grabando ${Math.floor(sec/60)}:${String(sec%60).padStart(2,'0')}`}
-    rec.raf=requestAnimationFrame(loop)};
-  rec={mr,raf:requestAnimationFrame(loop)};
+      const sec=(performance.now()-r.st)/1000;$('#liveT').textContent='Grabando '+fmtRec(sec);
+      const lb=$('#lkRec');if(r.fromLink&&lb)lb.textContent='■ Detener y analizar · '+fmtRec(sec)}
+    r.raf=requestAnimationFrame(loop)};
+  r.raf=requestAnimationFrame(loop);return true;
 }
-function stopRec(){if(!rec)return;cancelAnimationFrame(rec.raf);try{rec.mr.stop()}catch(e){}rec=null;$('#rec').classList.remove('on');$('#rec').textContent='● Grabar';setStatus('Procesando grabación…')}
+// Mejora la grabación: quita el silencio del inicio y del final, el zumbido grave del micrófono y ajusta el volumen
+function polish(buf,mic){
+  const sr=buf.sampleRate,ch=[0,1].map(c=>buf.getChannelData(Math.min(c,buf.numberOfChannels-1))),n=buf.length,blk=Math.round(sr*0.02);
+  let pk=0;for(const d of ch)for(let i=0;i<n;i++){const v=Math.abs(d[i]);if(v>pk)pk=v}if(pk<1e-5)return buf;
+  const thr=pk*0.03,loud=i=>{let e=0,c=0;for(const d of ch)for(let j=i;j<Math.min(n,i+blk);j++){e+=d[j]*d[j];c++}return Math.sqrt(e/c)>thr};
+  let s=0;while(s<n&&!loud(s))s+=blk;let e=n;while(e>s&&!loud(e-blk))e-=blk;
+  s=Math.max(0,s-Math.round(sr*0.15));e=Math.min(n,e+Math.round(sr*0.4));if(e-s<sr*0.3){s=0;e=n}
+  const out=getAC().createBuffer(2,e-s,sr),k=Math.exp(-2*Math.PI*45/sr),g=0.95/pk;
+  for(let c=0;c<2;c++){const d=ch[c],o=out.getChannelData(c);let px=0,py=0;
+    for(let i=s;i<e;i++){let v=d[i];if(mic){const y=k*(py+v-px);px=v;py=y;v=y}o[i-s]=v*g}}
+  return out;
+}
+async function stopRec(){
+  if(!rec)return;const r=rec;rec=null;cancelAnimationFrame(r.raf);
+  $('#rec').classList.remove('on');$('#rec').textContent='● Grabar';$('#live').hidden=true;setStatus('Procesando grabación…');
+  try{r.onStop&&r.onStop()}catch(e){}
+  let buf=null;
+  try{
+    if(r.node){await new Promise(res=>setTimeout(res,150));r.node.port.onmessage=null;try{r.src.disconnect();r.node.disconnect();r.z.disconnect()}catch(e){}
+      const n=r.L.reduce((s,c)=>s+c.length,0);if(n>r.sr*0.3){buf=getAC().createBuffer(2,n,r.sr);const l=buf.getChannelData(0),rr=buf.getChannelData(1);let o=0;
+        for(let i=0;i<r.L.length;i++){l.set(r.L[i],o);rr.set(r.R[i],o);o+=r.L[i].length}}}
+    else if(r.mr){await new Promise(res=>{r.mr.onstop=res;r.mr.stop()});buf=await decode(await new Blob(r.chunks,{type:r.mr.mimeType||'audio/webm'}).arrayBuffer())}
+  }catch(e){buf=null}
+  r.stream.getTracks().forEach(t=>t.stop());try{r.src.disconnect()}catch(e){}
+  if(!buf){setStatus('La grabación quedó vacía o muy corta. Intenta de nuevo.',true);return}
+  await useBuffer(polish(buf,!r.tab),r.name+' ('+new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'})+')');
+}
 $('#rec').addEventListener('click',()=>rec?stopRec():startRec());
+
 // Búsqueda de canciones: catálogo de Apple Music (vistas previas de 30 s)
 const esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function openSp(msg){$('#sp').hidden=false;if(msg)$('#spMsg').textContent=msg;$('#sp').scrollIntoView({behavior:'smooth',block:'start'})}
@@ -741,17 +782,37 @@ async function linkInfo(raw){
   I.title=I.title.replace(/\s+(ft|feat)\.?\s.*$/i,'').trim();
   return I;
 }
+function embedSrc(I){if(!I.embed)return '';if(I.source==='YouTube')return I.embed+'?enablejsapi=1&playsinline=1&rel=0&origin='+encodeURIComponent(location.origin);if(I.source==='SoundCloud')return I.embed+'&visual=false&hide_related=true&show_comments=false';return I.embed}
+function embedCmd(I,what){const f=$('#lkFrame');if(!f||!f.contentWindow)return false;const w=f.contentWindow,post=m=>{try{w.postMessage(m,'*')}catch(e){}};
+  if(I.source==='YouTube'){post(JSON.stringify({event:'listening',id:1,channel:'widget'}));post(JSON.stringify({event:'command',func:what==='play'?'playVideo':'pauseVideo',args:[]}));return true}
+  if(I.source==='SoundCloud'){if(what==='play')post(JSON.stringify({method:'addEventListener',value:'finish'}));post(JSON.stringify({method:what}));return true}
+  if(I.source==='Spotify'){post({command:what==='play'?'resume':'pause'});return false}
+  return false}
+// Fin de la canción en YouTube / SoundCloud → termina la grabación sola
+addEventListener('message',e=>{if(!rec||!rec.fromLink)return;let d=e.data;if(typeof d==='string'){try{d=JSON.parse(d)}catch(err){return}}if(!d)return;
+  if(/youtube\.com$/.test(new URL(e.origin||'https://x').hostname)){const st=d.info&&d.info.playerState!==undefined?d.info.playerState:(d.event==='onStateChange'?d.info:undefined);if(st===1)rec.playing=true;if(st===0)stopRec()}
+  if(/soundcloud\.com$/.test(new URL(e.origin||'https://x').hostname)&&d.method==='finish')stopRec()});
 function showLink(I){
-  const box=$('#spLink');if(!I){box.innerHTML='';return}
-  const frame=I.embed?(I.h?`<iframe src="${esc(I.embed)}" height="${I.h}" loading="lazy" allow="autoplay; encrypted-media" title="${esc(I.title||'Reproductor')}"></iframe>`:`<div class="vid"><iframe src="${esc(I.embed)}" loading="lazy" allow="autoplay; encrypted-media" allowfullscreen title="${esc(I.title||'Video')}"></iframe></div>`):'';
-  box.innerHTML=`<div class="lcard"><p class="spmsg" style="margin:0 0 8px">Desde <b>${esc(I.source)}</b>: <b>${esc(collapse(I.title)||'canción sin nombre')}</b>${I.artist?' — '+esc(I.artist):''}</p>${frame}
-    <div class="bar" style="margin-top:10px"><button class="btn" id="lkRec" type="button">● Grabar mientras suena</button><a class="btn" href="${esc(I.url)}" target="_blank" rel="noopener">Abrir enlace original</a></div>
-    <small class="ihint">El reproductor es solo para escuchar: ${esc(I.source)} no deja que otras apps lean su audio. Para analizar la canción completa, toca “Grabar mientras suena”, dale play y sube el volumen (o reprodúcela en otro aparato). Abajo puedes elegir la vista previa de 30 s.</small></div>`;
-  $('#lkRec').addEventListener('click',()=>{if(!rec)startRec();document.querySelector('.stage').scrollIntoView({behavior:'smooth'})});
+  const box=$('#spLink');if(!I){box.innerHTML='';S.link=null;return}S.link=I;
+  const src=embedSrc(I),frame=src?(I.h?`<iframe id="lkFrame" src="${esc(src)}" height="${I.h}" allow="autoplay; encrypted-media" title="${esc(I.title||'Reproductor')}"></iframe>`:`<div class="vid"><iframe id="lkFrame" src="${esc(src)}" allow="autoplay; encrypted-media" allowfullscreen title="${esc(I.title||'Video')}"></iframe></div>`):'';
+  box.innerHTML=`<div class="lcard"><div class="lhead"><div><b>${esc(collapse(I.title)||'Canción')}</b>${I.artist?` <span>· ${esc(I.artist)}</span>`:''}</div><a class="lsrc" href="${esc(I.url)}" target="_blank" rel="noopener">${esc(I.source)} ↗</a></div>${frame}
+    <button class="btn pri lrec" id="lkRec" type="button">● Grabar canción completa</button>
+    <small class="ihint" id="lkHint">${canTab()?'Al tocarlo, la canción suena y se graba el audio de esta pestaña en alta calidad. En la ventana que aparece, elige esta pestaña y activa “Compartir audio”.':'Al tocarlo, la canción suena y se graba a la vez. Sube el volumen del teléfono al máximo.'}</small></div>`;
+  $('#lkRec').addEventListener('click',()=>{if(rec&&rec.fromLink)stopRec();else startLinkRec(I)});
+}
+async function startLinkRec(I){
+  const b=$('#lkRec');b.disabled=true;
+  const ok=await startRec({tab:canTab(),fromLink:true,name:collapse(I.title)||'Grabación',onStop:()=>{embedCmd(I,'pause');const x=$('#lkRec');if(x){x.textContent='● Grabar canción completa';x.classList.remove('on')}const h=$('#lkHint');if(h)h.textContent='Listo: la grabación se está analizando arriba.'}});
+  b.disabled=false;if(!ok)return;b.classList.add('on');b.textContent='■ Detener y analizar · 0:00';
+  const auto=embedCmd(I,'play');
+  $('#lkHint').textContent=auto?'Sonando y grabando. Se detiene sola cuando termina la canción.':'Grabando. Toca ▶ en el reproductor; cuando termine la canción, toca “Detener y analizar”.';
+  if(auto)setTimeout(()=>{if(rec&&rec.fromLink&&!rec.playing&&I.source==='YouTube')$('#lkHint').textContent='Grabando. Si la canción no empezó, toca ▶ en el video.'},3000);
 }
 async function spHandle(input){
   input=String(input).trim();if(!input)return;
-  if(!isLink(input)){showLink(null);$('#spQ').value=input;spSearch(input);return}
+  const box=$('#spResBox');
+  if(!isLink(input)){showLink(null);box.classList.add('plain');box.open=true;$('#spQ').value=input;spSearch(input);return}
+  box.classList.remove('plain');box.open=false;
   $('#spMsg').textContent='Leyendo el enlace…';$('#spRes').innerHTML='';
   const I=await linkInfo(input);
   if(!I){$('#spMsg').textContent='Ese enlace no se ve válido. Revisa que esté completo.';return}
@@ -759,7 +820,7 @@ async function spHandle(input){
   const name=collapse(I.title),q=[name,I.artist].filter(Boolean).join(' ');
   S.linkTrack={name,artist:I.artist};
   if(I.track&&I.track.previewUrl){$('#spMsg').textContent='Canción encontrada en Apple Music.';$('#spQ').value=q;spPick(I.track);return}
-  if(q){$('#spQ').value=q;$('#spMsg').textContent=`Encontré “${name}”${I.artist?' de '+I.artist:''}. Busco la misma canción en el catálogo…`;spSearch(q)}
+  if(q){$('#spQ').value=q;$('#spMsg').textContent=I.embed?'Listo. Toca “Grabar canción completa” y la canción sonará mientras se graba.':`Encontré “${name}”${I.artist?' de '+I.artist:''}.`;spSearch(q);if(!I.embed){box.classList.add('plain');box.open=true}}
   else{$('#spQ').value='';$('#spMsg').textContent='Abrí el enlace, pero no pude leer el nombre de la canción. Escríbelo (canción y artista) y toca Buscar.';$('#spQ').focus()}
 }
 $('#spBtn').addEventListener('click',()=>{openSp();$('#spQ').focus()});
