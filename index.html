@@ -64,6 +64,7 @@ input[type=range]{width:100%;accent-color:var(--acc);height:32px}
 .note{color:var(--mut);font-size:14px;margin-top:18px;max-width:70ch}
 .drop .stage{outline:3px dashed var(--acc);outline-offset:4px}
 [hidden]{display:none!important}
+.actions{position:relative}.recmenu{position:absolute;top:calc(100% + 6px);right:0;z-index:20;display:grid;gap:8px;width:min(330px,92vw);background:var(--card);border:1.5px solid var(--line);border-radius:14px;padding:12px;box-shadow:0 12px 30px rgba(0,0,0,.15)}
 #toast{position:fixed;left:50%;bottom:max(18px,env(safe-area-inset-bottom));transform:translateX(-50%);z-index:60;max-width:min(92vw,520px);background:var(--ink);color:var(--bg);padding:12px 16px;border-radius:14px;font-size:15px;line-height:1.4;box-shadow:0 8px 30px rgba(0,0,0,.25)}#toast.err{background:#d6283b;color:#fff}
 #sp{padding-top:0}
 .inst{border:1.5px solid var(--line);border-radius:18px;padding:16px 18px;background:var(--card)}
@@ -152,6 +153,11 @@ body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bot
   <div class="actions">
     <span class="btn pri upl">Subir audio<input id="file" type="file" aria-label="Subir audio"></span>
     <button class="btn rec" id="rec">● Grabar</button>
+    <div id="recMenu" class="recmenu" hidden>
+      <button class="btn pri" id="recSys" type="button">Lo que suena en el computador</button>
+      <button class="btn" id="recMic" type="button">Micrófono (cantar o tocar)</button>
+      <small class="ihint">“Lo que suena” graba el audio directo, sin micrófono: sirve aunque uses audífonos. Elige la pestaña donde suena la canción y activa “Compartir audio”.</small>
+    </div>
     <button class="btn" id="spBtn">Buscar canción</button>
     <button class="btn" id="demo">Ejemplo</button>
     <p class="hint desk">También puedes arrastrar un archivo de audio aquí.</p>
@@ -368,7 +374,7 @@ async function useBuffer(buf,name){stop();S.track=S.trackNext||guessTrack(name);
   if(buf.duration>600)setStatus('Audio largo: el análisis puede tardar un poco…');
   const x=await toMono(buf);S.A=await analyze(x);resegment();setStatus(S.notes.length+' notas detectadas');wrap.scrollLeft=0}
 async function loadFile(f){if(!f)return;setStatus('Leyendo '+f.name+'…');
-  try{const buf=await decode(await f.arrayBuffer());await useBuffer(buf,f.name)}catch(e){setStatus('No pude leer ese archivo. Prueba con MP3, WAV, M4A u OGG.',true)}}
+  try{const buf=await decode(await f.arrayBuffer());await useBuffer(buf,f.name)}catch(e){setStatus('No pude leer ese archivo. Prueba con MP3, WAV, M4A, OGG o un video MP4.',true)}}
 const TW=[[60,1],[60,1],[67,1],[67,1],[69,1],[69,1],[67,2],[65,1],[65,1],[64,1],[64,1],[62,1],[62,1],[60,2]];
 async function demo(){
   const q=.42,sr=44100,tot=TW.reduce((s,n)=>s+n[1],0)*q+.7,oc=new OfflineAudioContext(1,Math.ceil(tot*sr),sr);let t=.3;
@@ -640,11 +646,11 @@ async function startRec(o={}){
 async function startRec0(o={}){
   stop();const a=getAC();try{await a.resume()}catch(e){}
   if(!window.isSecureContext||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){toast('Este navegador no deja grabar aquí. Abre la app en Chrome (Android) o Safari (iPhone), o usa “Subir audio”.',true);return false}
-  toast(o.tab&&canTab()?'Elige esta pestaña y activa “Compartir audio”…':'Pidiendo permiso para usar el micrófono…',false,6000);
+  toast(o.tab&&canTab()?(o.screen?'Elige la pestaña donde suena la canción (o “Pantalla completa” en Windows) y activa “Compartir audio”…':'Elige esta pestaña y activa “Compartir audio”…'):'Pidiendo permiso para usar el micrófono…',false,6000);
   const slow=setTimeout(()=>toast('¿No aparece la pregunta de permiso? Revisa en los ajustes del navegador que esta página pueda usar el micrófono.',true),7000);
   const useTab=!!o.tab&&canTab();let stream;
   try{
-    if(useTab){stream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,suppressLocalAudioPlayback:false},preferCurrentTab:true,selfBrowserSurface:'include',systemAudio:'include'});
+    if(useTab){stream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,suppressLocalAudioPlayback:false},...(o.screen?{selfBrowserSurface:'exclude',surfaceSwitching:'include'}:{preferCurrentTab:true,selfBrowserSurface:'include'}),systemAudio:'include'});
       if(!stream.getAudioTracks().length){stream.getTracks().forEach(t=>t.stop());throw new Error('noaudio')}}
     else stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,channelCount:{ideal:2},sampleRate:{ideal:48000}}});
   }catch(e){clearTimeout(slow);toast(e.message==='noaudio'?'No se compartió el audio: elige esta pestaña y activa “Compartir audio de la pestaña”.':useTab?'No se pudo grabar el audio de la pestaña.':(e&&e.name==='NotAllowedError'?'No diste permiso para el micrófono. Actívalo en los ajustes del navegador para esta página y vuelve a intentar.':'No pude usar el micrófono ('+(e&&e.name||'error')+').'),true);return false}
@@ -658,7 +664,7 @@ async function startRec0(o={}){
     try{src&&src.connect(an)}catch(err){}
     r.mr=new MediaRecorder(stream,{audioBitsPerSecond:256000});r.mr.ondataavailable=e=>{if(e.data.size)r.chunks.push(e.data)};r.mr.start(250)}
   stream.getTracks().forEach(t=>t.addEventListener('ended',()=>{if(rec===r)stopRec()}));
-  rec=r;toast(useTab?'Grabando el audio de esta pestaña':'Grabando…',false,2500);$('#live').hidden=false;$('#rec').classList.add('on');$('#rec').textContent='■ Detener';setStatus(useTab?'Grabando el audio de esta pestaña…':'Grabando…');
+  rec=r;toast(useTab?(o.screen?'Grabando lo que suena en el computador. Dale play a la canción.':'Grabando el audio de esta pestaña'):'Grabando…',false,3500);$('#live').hidden=false;$('#rec').classList.add('on');$('#rec').textContent='■ Detener';setStatus(useTab?'Grabando el audio de esta pestaña…':'Grabando…');
   const b=new Float32Array(4096);let last=0;
   const loop=t=>{if(rec!==r)return;if(t-last>45){last=t;let f=0;if(an){an.getFloatTimeDomainData(b);f=yinLive(b,a.sampleRate)}
       if(f){const m=69+12*Math.log2(f/440),q=Math.round(m),c=Math.round((m-q)*100);$('#liveN').textContent=nm(q);$('#liveF').textContent=`${f.toFixed(1)} Hz · ${c>0?'+':''}${c} cents`}
@@ -695,7 +701,10 @@ async function stopRec(){
   if(!buf){setStatus('La grabación quedó vacía o muy corta. Intenta de nuevo.',true);return}
   await useBuffer(polish(buf,!r.tab),r.name+' ('+new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'})+')');
 }
-$('#rec').addEventListener('click',()=>rec?stopRec():startRec());
+$('#rec').addEventListener('click',()=>{if(rec){stopRec();return}if(canTab()){$('#recMenu').hidden=!$('#recMenu').hidden;return}startRec()});
+$('#recSys').addEventListener('click',()=>{$('#recMenu').hidden=true;startRec({tab:true,screen:true,name:'Grabación'})});
+$('#recMic').addEventListener('click',()=>{$('#recMenu').hidden=true;startRec()});
+document.addEventListener('click',e=>{if(!e.target.closest('#recMenu,#rec'))$('#recMenu').hidden=true});
 
 // Búsqueda de canciones: catálogo de Apple Music (vistas previas de 30 s)
 const esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -807,7 +816,7 @@ function showLink(I){
   const src=embedSrc(I),frame=src?(I.h?`<iframe id="lkFrame" src="${esc(src)}" height="${I.h}" allow="autoplay; encrypted-media" title="${esc(I.title||'Reproductor')}"></iframe>`:`<div class="vid"><iframe id="lkFrame" src="${esc(src)}" allow="autoplay; encrypted-media" allowfullscreen title="${esc(I.title||'Video')}"></iframe></div>`):'';
   box.innerHTML=`<div class="lcard"><div class="lhead"><div><b>${esc(collapse(I.title)||'Canción')}</b>${I.artist?` <span>· ${esc(I.artist)}</span>`:''}</div><a class="lsrc" href="${esc(I.url)}" target="_blank" rel="noopener">${esc(I.source)} ↗</a></div>${frame}
     <button class="btn pri lrec" id="lkRec" type="button">● Grabar canción completa</button>
-    <small class="ihint" id="lkHint">${canTab()?'Al tocarlo, la canción suena y se graba el audio de esta pestaña en alta calidad. En la ventana que aparece, elige esta pestaña y activa “Compartir audio”.':'Al tocarlo, la canción suena y se graba a la vez. Sube el volumen del teléfono al máximo.'}</small></div>`;
+    <small class="ihint" id="lkHint">${canTab()?'Al tocarlo, la canción suena y se graba el audio de esta pestaña en alta calidad. En la ventana que aparece, elige esta pestaña y activa “Compartir audio”.':'Al tocarlo, la canción suena y se graba por el micrófono: sube el volumen y no uses audífonos. (Los navegadores de celular no dejan grabar el audio interno; para eso usa la grabación de pantalla del teléfono y comparte el video a Notas.)'}</small></div>`;
   $('#lkRec').addEventListener('click',()=>{if(rec&&rec.fromLink)stopRec();else startLinkRec(I)});
 }
 async function startLinkRec(I){
