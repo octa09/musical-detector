@@ -64,6 +64,7 @@ input[type=range]{width:100%;accent-color:var(--acc);height:32px}
 .note{color:var(--mut);font-size:14px;margin-top:18px;max-width:70ch}
 .drop .stage{outline:3px dashed var(--acc);outline-offset:4px}
 [hidden]{display:none!important}
+#toast{position:fixed;left:50%;bottom:max(18px,env(safe-area-inset-bottom));transform:translateX(-50%);z-index:60;max-width:min(92vw,520px);background:var(--ink);color:var(--bg);padding:12px 16px;border-radius:14px;font-size:15px;line-height:1.4;box-shadow:0 8px 30px rgba(0,0,0,.25)}#toast.err{background:#d6283b;color:#fff}
 #sp{padding-top:0}
 .inst{border:1.5px solid var(--line);border-radius:18px;padding:16px 18px;background:var(--card)}
 .ihead{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;justify-content:space-between}.ihead>div{flex:1 1 300px}
@@ -141,6 +142,7 @@ body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bot
 @media(hover:none){.desk.keys{display:none}}
 </style></head><body>
 <span id="probe"></span>
+<div id="toast" role="status" aria-live="polite" hidden></div>
 <div id="inst" class="instbar" hidden><span id="instTxt">Instala la app para abrirla desde tu pantalla de inicio.</span><button class="btn pri" id="instBtn" hidden>Instalar</button><button class="btn" id="instX" aria-label="Cerrar">✕</button></div>
 <header class="band top">
   <div class="intro">
@@ -624,7 +626,8 @@ $('#lOther').addEventListener('click',()=>{$('#lMsg').textContent='Elige la letr
 $('#lSync').addEventListener('click',syncLyrics);
 $('#lCopy').addEventListener('click',async()=>{const t=(S.lyrView||[]).map(l=>l.t).join('\n');try{await navigator.clipboard.writeText(t);$('#lCopy').textContent='Copiada'}catch(e){$('#lCopy').textContent='No se pudo copiar'}setTimeout(()=>$('#lCopy').textContent='Copiar letra',1600)});
 // Grabación sin compresión (AudioWorklet). En computador puede grabar directo el audio de esta pestaña.
-let rec=null,recMod=null;
+let rec=null,recMod=null,toastT=0;
+function toast(t,err,ms){const el=$('#toast');el.textContent=t;el.classList.toggle('err',!!err);el.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>el.hidden=true,ms||(err?9000:4000));const h=$('#lkHint');if(h&&err)h.textContent=t;if(err)setStatus(t,true)}
 const RECW="class R extends AudioWorkletProcessor{process(i){const c=i[0];if(c&&c.length)this.port.postMessage([c[0].slice(),(c[1]||c[0]).slice()]);return true}}registerProcessor('notas-rec',R)";
 const canTab=()=>!!(navigator.mediaDevices&&navigator.mediaDevices.getDisplayMedia)&&!/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)&&matchMedia('(pointer:fine)').matches;
 const fmtRec=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
@@ -632,25 +635,32 @@ function yinLive(b,sr){const N=1024,tMin=Math.floor(sr/1400),tMax=Math.min(Math.
   const d=new Float32Array(tMax+1);let run=0;d[0]=1;for(let t=1;t<=tMax;t++){let s=0;for(let j=0;j<N;j++){const df=b[j]-b[j+t];s+=df*df}run+=s;d[t]=run?s*t/run:1}
   for(let t=tMin;t<=tMax;t++)if(d[t]<0.15){while(t<tMax&&d[t+1]<d[t])t++;const a=d[t-1],c=d[t+1]??d[t],den=a-2*d[t]+c;return sr/(t+(den?0.5*(a-c)/den:0))}return 0}
 async function startRec(o={}){
+  try{return await startRec0(o)}catch(err){toast('No se pudo empezar a grabar ('+(err&&err.message||err)+'). Prueba abrir la app en Chrome o Safari actualizado.',true);return false}
+}
+async function startRec0(o={}){
   stop();const a=getAC();try{await a.resume()}catch(e){}
-  if(!navigator.mediaDevices){setStatus('Este navegador no permite grabar. Usa “Subir audio”.',true);return false}
+  if(!window.isSecureContext||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){toast('Este navegador no deja grabar aquí. Abre la app en Chrome (Android) o Safari (iPhone), o usa “Subir audio”.',true);return false}
+  toast(o.tab&&canTab()?'Elige esta pestaña y activa “Compartir audio”…':'Pidiendo permiso para usar el micrófono…',false,6000);
+  const slow=setTimeout(()=>toast('¿No aparece la pregunta de permiso? Revisa en los ajustes del navegador que esta página pueda usar el micrófono.',true),7000);
   const useTab=!!o.tab&&canTab();let stream;
   try{
     if(useTab){stream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,suppressLocalAudioPlayback:false},preferCurrentTab:true,selfBrowserSurface:'include',systemAudio:'include'});
       if(!stream.getAudioTracks().length){stream.getTracks().forEach(t=>t.stop());throw new Error('noaudio')}}
     else stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,channelCount:{ideal:2},sampleRate:{ideal:48000}}});
-  }catch(e){setStatus(e.message==='noaudio'?'No se compartió el audio: elige esta pestaña y activa “Compartir audio de la pestaña”.':useTab?'No se pudo grabar el audio de la pestaña.':'No pude usar el micrófono. Revisa el permiso en los ajustes del teléfono.',true);return false}
-  const src=a.createMediaStreamSource(stream),an=a.createAnalyser();an.fftSize=4096;src.connect(an);
+  }catch(e){clearTimeout(slow);toast(e.message==='noaudio'?'No se compartió el audio: elige esta pestaña y activa “Compartir audio de la pestaña”.':useTab?'No se pudo grabar el audio de la pestaña.':(e&&e.name==='NotAllowedError'?'No diste permiso para el micrófono. Actívalo en los ajustes del navegador para esta página y vuelve a intentar.':'No pude usar el micrófono ('+(e&&e.name||'error')+').'),true);return false}
+  clearTimeout(slow);
+  let src=null,an=null;try{src=a.createMediaStreamSource(stream);an=a.createAnalyser();an.fftSize=4096;src.connect(an)}catch(e){src=null;an=null}
   const r={stream,src,an,L:[],R:[],node:null,mr:null,chunks:[],tab:useTab,sr:a.sampleRate,st:performance.now(),name:o.name||'Grabación',onStop:o.onStop,fromLink:!!o.fromLink,raf:0};
-  try{if(!a.audioWorklet)throw 0;if(recMod!==a){await a.audioWorklet.addModule(URL.createObjectURL(new Blob([RECW],{type:'text/javascript'})));recMod=a}
+  try{if(!a.audioWorklet||!src)throw 0;if(recMod!==a){await a.audioWorklet.addModule(URL.createObjectURL(new Blob([RECW],{type:'text/javascript'})));recMod=a}
     r.node=new AudioWorkletNode(a,'notas-rec',{numberOfInputs:1,numberOfOutputs:1,channelCount:2,channelCountMode:'explicit'});
     r.node.port.onmessage=e=>{r.L.push(e.data[0]);r.R.push(e.data[1])};r.z=a.createGain();r.z.gain.value=0;src.connect(r.node);r.node.connect(r.z);r.z.connect(a.destination)}
-  catch(e){r.node=null;if(!window.MediaRecorder){stream.getTracks().forEach(t=>t.stop());setStatus('Este navegador no permite grabar. Usa “Subir audio”.',true);return false}
+  catch(e){r.node=null;if(!window.MediaRecorder){stream.getTracks().forEach(t=>t.stop());toast('Este navegador no permite grabar. Usa “Subir audio”.',true);return false}
+    try{src&&src.connect(an)}catch(err){}
     r.mr=new MediaRecorder(stream,{audioBitsPerSecond:256000});r.mr.ondataavailable=e=>{if(e.data.size)r.chunks.push(e.data)};r.mr.start(250)}
   stream.getTracks().forEach(t=>t.addEventListener('ended',()=>{if(rec===r)stopRec()}));
-  rec=r;$('#live').hidden=false;$('#rec').classList.add('on');$('#rec').textContent='■ Detener';setStatus(useTab?'Grabando el audio de esta pestaña…':'Grabando…');
-  const b=new Float32Array(an.fftSize);let last=0;
-  const loop=t=>{if(rec!==r)return;if(t-last>45){last=t;an.getFloatTimeDomainData(b);const f=yinLive(b,a.sampleRate);
+  rec=r;toast(useTab?'Grabando el audio de esta pestaña':'Grabando…',false,2500);$('#live').hidden=false;$('#rec').classList.add('on');$('#rec').textContent='■ Detener';setStatus(useTab?'Grabando el audio de esta pestaña…':'Grabando…');
+  const b=new Float32Array(4096);let last=0;
+  const loop=t=>{if(rec!==r)return;if(t-last>45){last=t;let f=0;if(an){an.getFloatTimeDomainData(b);f=yinLive(b,a.sampleRate)}
       if(f){const m=69+12*Math.log2(f/440),q=Math.round(m),c=Math.round((m-q)*100);$('#liveN').textContent=nm(q);$('#liveF').textContent=`${f.toFixed(1)} Hz · ${c>0?'+':''}${c} cents`}
       else{$('#liveN').textContent='…';$('#liveF').textContent=''}
       const sec=(performance.now()-r.st)/1000;$('#liveT').textContent='Grabando '+fmtRec(sec);
@@ -676,12 +686,12 @@ async function stopRec(){
   try{r.onStop&&r.onStop()}catch(e){}
   let buf=null;
   try{
-    if(r.node){await new Promise(res=>setTimeout(res,150));r.node.port.onmessage=null;try{r.src.disconnect();r.node.disconnect();r.z.disconnect()}catch(e){}
+    if(r.node){await new Promise(res=>setTimeout(res,150));r.node.port.onmessage=null;try{r.src&&r.src.disconnect();r.node.disconnect();r.z.disconnect()}catch(e){}
       const n=r.L.reduce((s,c)=>s+c.length,0);if(n>r.sr*0.3){buf=getAC().createBuffer(2,n,r.sr);const l=buf.getChannelData(0),rr=buf.getChannelData(1);let o=0;
         for(let i=0;i<r.L.length;i++){l.set(r.L[i],o);rr.set(r.R[i],o);o+=r.L[i].length}}}
     else if(r.mr){await new Promise(res=>{r.mr.onstop=res;r.mr.stop()});buf=await decode(await new Blob(r.chunks,{type:r.mr.mimeType||'audio/webm'}).arrayBuffer())}
   }catch(e){buf=null}
-  r.stream.getTracks().forEach(t=>t.stop());try{r.src.disconnect()}catch(e){}
+  r.stream.getTracks().forEach(t=>t.stop());try{r.src&&r.src.disconnect()}catch(e){}
   if(!buf){setStatus('La grabación quedó vacía o muy corta. Intenta de nuevo.',true);return}
   await useBuffer(polish(buf,!r.tab),r.name+' ('+new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'})+')');
 }
@@ -801,9 +811,9 @@ function showLink(I){
   $('#lkRec').addEventListener('click',()=>{if(rec&&rec.fromLink)stopRec();else startLinkRec(I)});
 }
 async function startLinkRec(I){
-  const b=$('#lkRec');b.disabled=true;
+  const b=$('#lkRec');b.disabled=true;b.textContent='Preparando…';
   const ok=await startRec({tab:canTab(),fromLink:true,name:collapse(I.title)||'Grabación',onStop:()=>{embedCmd(I,'pause');const x=$('#lkRec');if(x){x.textContent='● Grabar canción completa';x.classList.remove('on')}const h=$('#lkHint');if(h)h.textContent='Listo: la grabación se está analizando arriba.'}});
-  b.disabled=false;if(!ok)return;b.classList.add('on');b.textContent='■ Detener y analizar · 0:00';
+  b.disabled=false;if(!ok){b.textContent='● Grabar canción completa';return}b.classList.add('on');b.textContent='■ Detener y analizar · 0:00';
   const auto=embedCmd(I,'play');
   $('#lkHint').textContent=auto?'Sonando y grabando. Se detiene sola cuando termina la canción.':'Grabando. Toca ▶ en el reproductor; cuando termine la canción, toca “Detener y analizar”.';
   if(auto)setTimeout(()=>{if(rec&&rec.fromLink&&!rec.playing&&I.source==='YouTube')$('#lkHint').textContent='Grabando. Si la canción no empezó, toca ▶ en el video.'},3000);
