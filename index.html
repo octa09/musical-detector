@@ -640,6 +640,12 @@ const fmtRec=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
 function yinLive(b,sr){const N=1024,tMin=Math.floor(sr/1400),tMax=Math.min(Math.ceil(sr/62),b.length-N-1);let e=0;for(let j=0;j<N;j++)e+=b[j]*b[j];if(Math.sqrt(e/N)<0.008)return 0;
   const d=new Float32Array(tMax+1);let run=0;d[0]=1;for(let t=1;t<=tMax;t++){let s=0;for(let j=0;j<N;j++){const df=b[j]-b[j+t];s+=df*df}run+=s;d[t]=run?s*t/run:1}
   for(let t=tMin;t<=tMax;t++)if(d[t]<0.15){while(t<tMax&&d[t+1]<d[t])t++;const a=d[t-1],c=d[t+1]??d[t],den=a-2*d[t]+c;return sr/(t+(den?0.5*(a-c)/den:0))}return 0}
+function tabErr(e){const n=e&&e.name||'';
+  if(window.top!==window.self)return 'Aquí no se puede grabar la pestaña: abre la app directo en octa09.github.io/musical-detector.';
+  if(n==='NotAllowedError')return 'No se compartió nada. En la ventana de Chrome toca “Pestaña de Chrome”, elige la pestaña de la canción, activa “Compartir audio” y toca Compartir. (En Mac, para “Pantalla completa” Chrome necesita permiso en Ajustes del Sistema → Privacidad → Grabación de pantalla.)';
+  if(n==='NotSupportedError'||n==='TypeError')return 'Este navegador no permite grabar pestañas. Usa Chrome o Edge en un computador.';
+  if(n==='AbortError'||n==='NotReadableError')return 'El sistema no dejó capturar la pantalla. Cierra otras apps que estén grabando y vuelve a intentar.';
+  return 'No se pudo grabar la pestaña ('+(n||e&&e.message||'error')+').'}
 async function startRec(o={}){
   try{return await startRec0(o)}catch(err){toast('No se pudo empezar a grabar ('+(err&&err.message||err)+'). Prueba abrir la app en Chrome o Safari actualizado.',true);return false}
 }
@@ -650,10 +656,13 @@ async function startRec0(o={}){
   const slow=setTimeout(()=>toast('¿No aparece la pregunta de permiso? Revisa en los ajustes del navegador que esta página pueda usar el micrófono.',true),7000);
   const useTab=!!o.tab&&canTab();let stream;
   try{
-    if(useTab){stream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,suppressLocalAudioPlayback:false},...(o.screen?{selfBrowserSurface:'exclude',surfaceSwitching:'include'}:{preferCurrentTab:true,selfBrowserSurface:'include'}),systemAudio:'include'});
+    if(useTab){
+      const full={video:true,audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,suppressLocalAudioPlayback:false},...(o.screen?{selfBrowserSurface:'exclude',surfaceSwitching:'include'}:{preferCurrentTab:true,selfBrowserSurface:'include'}),systemAudio:'include'};
+      try{stream=await navigator.mediaDevices.getDisplayMedia(full)}
+      catch(e1){if(e1&&(e1.name==='TypeError'||e1.name==='OverconstrainedError'||e1.name==='NotSupportedError'))stream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:true});else throw e1}
       if(!stream.getAudioTracks().length){stream.getTracks().forEach(t=>t.stop());throw new Error('noaudio')}}
     else stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,channelCount:{ideal:2},sampleRate:{ideal:48000}}});
-  }catch(e){clearTimeout(slow);toast(e.message==='noaudio'?'No se compartió el audio: elige esta pestaña y activa “Compartir audio de la pestaña”.':useTab?'No se pudo grabar el audio de la pestaña.':(e&&e.name==='NotAllowedError'?'No diste permiso para el micrófono. Actívalo en los ajustes del navegador para esta página y vuelve a intentar.':'No pude usar el micrófono ('+(e&&e.name||'error')+').'),true);return false}
+  }catch(e){clearTimeout(slow);toast(e.message==='noaudio'?'Se compartió sin sonido: vuelve a intentar, elige “Pestaña de Chrome” y deja activado “Compartir audio de la pestaña”. (Con “Ventana” no hay audio.)':useTab?tabErr(e):(e&&e.name==='NotAllowedError'?'No diste permiso para el micrófono. Actívalo en los ajustes del navegador para esta página y vuelve a intentar.':'No pude usar el micrófono ('+(e&&e.name||'error')+').'),true);return false}
   clearTimeout(slow);
   let src=null,an=null;try{src=a.createMediaStreamSource(stream);an=a.createAnalyser();an.fftSize=4096;src.connect(an)}catch(e){src=null;an=null}
   const r={stream,src,an,L:[],R:[],node:null,mr:null,chunks:[],tab:useTab,sr:a.sampleRate,st:performance.now(),name:o.name||'Grabación',onStop:o.onStop,fromLink:!!o.fromLink,raf:0};
