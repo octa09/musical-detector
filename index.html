@@ -65,6 +65,7 @@ input[type=range]{width:100%;accent-color:var(--acc);height:32px}
 .drop .stage{outline:3px dashed var(--acc);outline-offset:4px}
 [hidden]{display:none!important}
 .actions{position:relative}.recmenu{position:absolute;top:calc(100% + 6px);right:0;z-index:20;display:grid;gap:8px;width:min(330px,92vw);background:var(--card);border:1.5px solid var(--line);border-radius:14px;padding:12px;box-shadow:0 12px 30px rgba(0,0,0,.15)}
+.err-note{color:#d6283b}
 #toast{position:fixed;left:50%;bottom:max(18px,env(safe-area-inset-bottom));transform:translateX(-50%);z-index:60;max-width:min(92vw,520px);background:var(--ink);color:var(--bg);padding:12px 16px;border-radius:14px;font-size:15px;line-height:1.4;box-shadow:0 8px 30px rgba(0,0,0,.25)}#toast.err{background:#d6283b;color:#fff}
 #sp{padding-top:0}
 .inst{border:1.5px solid var(--line);border-radius:18px;padding:16px 18px;background:var(--card)}
@@ -156,6 +157,7 @@ body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bot
     <div id="recMenu" class="recmenu" hidden>
       <button class="btn pri" id="recSys" type="button">Lo que suena en el computador</button>
       <button class="btn" id="recMic" type="button">Micrófono (cantar o tocar)</button>
+      <small class="ihint err-note" id="recSysNote" hidden>Tu navegador (Firefox o Safari) no permite grabar el audio de otras pestañas. Abre esta página en Google Chrome o Microsoft Edge para usar esta opción.</small>
       <small class="ihint">“Lo que suena” graba el audio directo, sin micrófono: sirve aunque uses audífonos. Elige la pestaña donde suena la canción y activa “Compartir audio”.</small>
     </div>
     <button class="btn" id="spBtn">Buscar canción</button>
@@ -635,7 +637,9 @@ $('#lCopy').addEventListener('click',async()=>{const t=(S.lyrView||[]).map(l=>l.
 let rec=null,recMod=null,toastT=0;
 function toast(t,err,ms){const el=$('#toast');el.textContent=t;el.classList.toggle('err',!!err);el.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>el.hidden=true,ms||(err?9000:4000));const h=$('#lkHint');if(h&&err)h.textContent=t;if(err)setStatus(t,true)}
 const RECW="class R extends AudioWorkletProcessor{process(i){const c=i[0];if(c&&c.length)this.port.postMessage([c[0].slice(),(c[1]||c[0]).slice()]);return true}}registerProcessor('notas-rec',R)";
-const canTab=()=>!!(navigator.mediaDevices&&navigator.mediaDevices.getDisplayMedia)&&!/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)&&matchMedia('(pointer:fine)').matches;
+const isDesk=()=>!/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)&&matchMedia('(pointer:fine)').matches;
+const chromium=()=>/Chrome\/|Chromium\/|Edg\//.test(navigator.userAgent)&&!/Firefox\//.test(navigator.userAgent);
+const canTab=()=>!!(navigator.mediaDevices&&navigator.mediaDevices.getDisplayMedia)&&isDesk()&&chromium();
 const fmtRec=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
 function yinLive(b,sr){const N=1024,tMin=Math.floor(sr/1400),tMax=Math.min(Math.ceil(sr/62),b.length-N-1);let e=0;for(let j=0;j<N;j++)e+=b[j]*b[j];if(Math.sqrt(e/N)<0.008)return 0;
   const d=new Float32Array(tMax+1);let run=0;d[0]=1;for(let t=1;t<=tMax;t++){let s=0;for(let j=0;j<N;j++){const df=b[j]-b[j+t];s+=df*df}run+=s;d[t]=run?s*t/run:1}
@@ -710,7 +714,7 @@ async function stopRec(){
   if(!buf){setStatus('La grabación quedó vacía o muy corta. Intenta de nuevo.',true);return}
   await useBuffer(polish(buf,!r.tab),r.name+' ('+new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'})+')');
 }
-$('#rec').addEventListener('click',()=>{if(rec){stopRec();return}if(canTab()){$('#recMenu').hidden=!$('#recMenu').hidden;return}startRec()});
+$('#rec').addEventListener('click',()=>{if(rec){stopRec();return}if(isDesk()){if(!canTab()){$('#recSys').disabled=true;$('#recSysNote').hidden=false}$('#recMenu').hidden=!$('#recMenu').hidden;return}startRec()});
 $('#recSys').addEventListener('click',()=>{$('#recMenu').hidden=true;startRec({tab:true,screen:true,name:'Grabación'})});
 $('#recMic').addEventListener('click',()=>{$('#recMenu').hidden=true;startRec()});
 document.addEventListener('click',e=>{if(!e.target.closest('#recMenu,#rec'))$('#recMenu').hidden=true});
